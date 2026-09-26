@@ -1,0 +1,17 @@
+{
+  "name": "jetatlas",
+  "version": "1.0.0",
+  "description": "Fighters and bombers drawn entirely in ASCII, with live afterburner and loadouts",
+  "license": "MIT",
+  "author": "Santosh Kafle",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node tools/check.cjs",
+    "test": "node build.mjs && node tools/check.cjs",
+    "smoke": "node tools/smoke.cjs"
+  }
+}

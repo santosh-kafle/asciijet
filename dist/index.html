@@ -3374,7 +3374,6 @@ function setLoadout(i) {
   const ac = state.ac, n = ac.loadouts.length;
   state.loadIdx = (i + n) % n; state.load = { ...ac.loadouts[state.loadIdx].set }; state.custom = false; state.hl = 0;
   fitFuel();
-  if (!state.bays && hasBayStores()) state.bays = false;
   rebuild(); renderDossier(); syncButtons(); audio.click();
   if (sheet.open) renderSheet();
 }

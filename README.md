@@ -5,6 +5,14 @@ Fighters and bombers drawn entirely in ASCII, in the spirit of [gcdatlas](https:
 
 Open `dist/index.html` in a browser. It is one self-contained file with no dependencies (Google Fonts is optional).
 
+> **This is just a fun project.** It was built for the joy of drawing jets out of text characters. It is not a
+> simulator or a reference work, and it is not affiliated with any manufacturer or air force. You are free to use it,
+> fork it, remix it and build on it: see [License](#license).
+
+![F-22A Raptor in afterburner with the air dominance loadout](docs/screenshots/f-22a.png)
+
+![MiG-31BM Foxhound at maximum afterburner carrying R-37M and R-73 missiles](docs/screenshots/mig-31bm.png)
+
 ## What it does
 
 | | |
@@ -34,6 +42,7 @@ drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **
 ## Build
 
 ```sh
+npm test                       # build + data check (what CI runs)
 node build.mjs                 # writes dist/index.html, dist/artifact.html, dist/engine.cjs (Node 18+)
 node tools/check.cjs           # data check: stores, stations, engine counts, every scene builds
 node tools/ascii.cjs f16 150 20 1 0   # render an aircraft as text in the terminal (key yaw pitch throttle loadout)
@@ -83,3 +92,15 @@ Commons file and `node tools/fetch-refs.cjs` downloads them to `tools/ref/`. The
 The overlay is scaled from the published length, so a part that runs past the real tail shows up in red or blue
 beyond the drawing. Where a published length includes a pitot or probe (MiG-29, Tornado), the geometry starts
 behind it and the boom is modelled.
+
+## Contributing
+
+Contributions are welcome: new aircraft, weapons, fixes to figures or shapes, rendering tricks, or bug reports.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE). Use it, copy it, change it, ship it, commercially or not; just keep the copyright notice.
+
+The reference three-views downloaded by `tools/fetch-refs.cjs` are not part of this repository and keep their own
+Wikimedia Commons licences. Aircraft and weapon names are used only to identify the real types they depict.
