@@ -639,8 +639,12 @@ function buildScene(ac, o = {}) {
         panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
+      else if (p.t === 'gatling') gatling(M, p, L);
     }
   }
+
+  // Gun muzzle(s) in aircraft space, for the firing effects
+  const G = fxFor(ac).gun, guns = !G ? [] : (G.pair ? [1, -1] : [1]).map(sg => ({ x: L / 2 - G.at[0], y: G.at[1], z: G.at[2] * sg }));
 
   // Floor height from the published height: the tallest point of the airframe (fin tip) stands
   // dims.height above the ground.
@@ -719,7 +723,7 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY, groundY };
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {
@@ -853,6 +857,21 @@ function markings(M, ac, panels) {
     const lift = (afT(0.45) - Math.min(afT(Math.max(0.01, 0.45 - u)), afT(Math.min(0.99, 0.45 + u)))) * tt * ch + 0.02;
     for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), r, ins.wing, lift);
   }
+}
+
+// Rotary cannon seen from outside (the A-10's GAU-8): a ring of barrels held by a muzzle clamp and a
+// mid-barrel support, running back into the nose. s0 muzzle, s1 where the barrels enter the fuselage.
+function gatling(M, p, L) {
+  const x0 = L / 2 - p.s0, x1 = L / 2 - p.s1, tf = (a, b, c) => [a, b + p.y, c + (p.z || 0)];
+  for (let i = 0; i < p.n; i++) {
+    const a = i / p.n * Math.PI * 2, by = Math.cos(a) * p.rc, bz = Math.sin(a) * p.rc;
+    loft(M, [[0, p.rb, p.rb, p.rb, by, 2], [x0 - x1, p.rb * 1.1, p.rb * 1.1, p.rb * 1.1, by, 2]],
+      { x0, seg: 6, mat: 'metal', capF: 'hole', tf: (q, b, c) => tf(q, b, c + bz) });
+  }
+  const R = p.rc + p.rb + 0.02;
+  for (const [ds, w] of [[0.05, 0.05], [(p.s1 - p.s0) * 0.45, 0.04]])
+    loft(M, [[0, R, R, R], [w, R, R, R]], { x0: x0 - ds, seg: 14, mat: 'dark', capF: 'dark', capB: 'dark', tf });
+  loft(M, [[0, p.rc * 0.45, p.rc * 0.45, p.rc * 0.45], [x0 - x1, p.rc * 0.45, p.rc * 0.45, p.rc * 0.45]], { x0: x0 - 0.02, seg: 8, mat: 'dark', tf });
 }
 
 // ---- landing gear: struts and wheels down to the floor
@@ -1691,7 +1710,7 @@ A({
   geo: [
     fus([[0, 0.25, 0.25, 0.25, 0, 2], [1, 0.55, 0.55, 0.55, 0, 2], [2.5, 0.75, 0.75, 0.72, 0.05, 2.3], [4.5, 0.85, 0.9, 0.75, 0.1, 2.5], [7, 0.9, 0.85, 0.8, 0, 2.6], [10, 0.78, 0.7, 0.7, 0, 2.4], [13, 0.5, 0.5, 0.5, 0.1, 2], [15, 0.35, 0.35, 0.35, 0.2, 2], [16.0, 0.2, 0.2, 0.2, 0.25, 2]], { capF: 'dark' }),
     // GAU-8 muzzle under the nose sets the overall length
-    { t: 'loft', st: [[-0.16, 0.07, 0.07, 0.07, -0.4], [0.3, 0.09, 0.09, 0.09, -0.4]], mat: 'dark', seg: 8 },
+    { t: 'gatling', s0: -0.16, s1: 1.1, y: -0.4, z: 0, n: 7, rc: 0.11, rb: 0.032 },
     canopy([[1.9, 0.05, 0.02, 0.02, 0.8], [2.5, 0.4, 0.45, 0.05, 0.9], [3.5, 0.44, 0.5, 0.05, 0.95], [4.4, 0.35, 0.32, 0.05, 0.95], [4.9, 0.05, 0.05, 0.02, 0.9]]),
     wing('wingc', trap(6.9, -0.45, 0.8, 3.05, 3.2, 0, 3.0, 0, 0.16)),
     wing('wing', [[6.9, -0.45, 3.2, 3.0, 0.15], [7.5, 0.23, 8.76, 2.05, 0.13]]),
@@ -2032,6 +2051,114 @@ const VISUALS = {
 };
 for (const a of AIRCRAFT) Object.assign(a, VISUALS[a.key] || {});
 
+// ---- 38-fx.js
+// Per-aircraft effects: how each engine's afterburner looks, how it sounds, and where the gun fires.
+//
+// flame: len [dry-ish, max AB] plume length in nozzle radii; I brightness; core/hot/mid/tail colours from
+//   the nozzle outwards; dia max Mach diamonds; dsp diamond spacing in nozzle diameters; smoke 0..1 visible
+//   exhaust smoke at dry power (J79, RD-33 and the old turbojets are famous for it; reheat burns it off).
+// snd: whine [idle, max] Hz of the compressor/fan tone; wq its sharpness; wg its level; howl centre Hz and
+//   level of the intake howl (J79, Olympus); roar and rumble scale the jet noise and its low end; crackle
+//   scales the afterburner crackle (turbojets crackle most).
+// gun: rate rounds per second, cal mm, at [s, y, z] muzzle position (s metres aft of the nose), dir +1
+//   forward or -1 for tail guns, pair for two guns (mirrored in z), rotary for Gatling spin-up, rounds.
+
+const FLAME = {
+  base:  { len: [6, 16], I: 1, core: [0.75, 0.82, 1.0], hot: [1.0, 0.74, 0.36], mid: [1.0, 0.47, 0.16], tail: [0.85, 0.24, 0.08], dia: 6, dsp: 1.25, smoke: 0 },
+  F110:  { hot: [1.0, 0.7, 0.3], dia: 6 },
+  F100:  { core: [0.68, 0.78, 1.0], hot: [1.0, 0.62, 0.46], mid: [1.0, 0.42, 0.24], dia: 7, dsp: 1.15 },
+  F119:  { len: [4, 10], I: 0.8, hot: [1.0, 0.62, 0.36], dia: 5, dsp: 1.0 },
+  F135:  { len: [7, 19], I: 1.15, core: [0.72, 0.8, 1.0], hot: [1.0, 0.72, 0.4], dia: 7, dsp: 1.3 },
+  F414:  { len: [6, 14], hot: [1.0, 0.66, 0.3], dia: 5 },
+  J79:   { len: [7, 18], hot: [1.0, 0.82, 0.38], mid: [1.0, 0.54, 0.14], dia: 6, smoke: 0.9 },
+  AL41:  { len: [7, 18], I: 1.1, core: [0.82, 0.76, 1.0], hot: [1.0, 0.72, 0.3], mid: [1.0, 0.45, 0.12], dia: 6, dsp: 1.35 },
+  RD33:  { hot: [1.0, 0.68, 0.28], dia: 5, smoke: 0.6 },
+  D30:   { len: [8, 20], I: 1.2, hot: [1.0, 0.7, 0.3], dia: 6, dsp: 1.4, smoke: 0.2 },
+  R25:   { len: [8, 19], hot: [1.0, 0.8, 0.34], mid: [1.0, 0.52, 0.12], dia: 6, smoke: 0.35 },
+  EJ200: { I: 0.95, core: [0.7, 0.8, 1.0], hot: [1.0, 0.7, 0.38], dia: 6 },
+  M88:   { len: [5, 13], hot: [1.0, 0.66, 0.34], dia: 5 },
+  RM12:  { len: [5, 13], dia: 5 },
+  WS10:  { hot: [1.0, 0.66, 0.28], dia: 5, smoke: 0.2 },
+  M53:   { len: [7, 17], hot: [1.0, 0.78, 0.34], dia: 6, smoke: 0.25 },
+  RB199: { len: [5, 12], hot: [1.0, 0.62, 0.26], dia: 4 },
+  F101:  { len: [6, 15], core: [0.7, 0.8, 1.0], dia: 6 },
+  NK32:  { len: [8, 20], I: 1.2, dia: 6, dsp: 1.4 },
+  NK25:  { len: [8, 19], I: 1.2, dia: 6, smoke: 0.4 },
+  TF33:  { smoke: 0.75 }, OLY:   { smoke: 0.6 }, TF34:  {}, F118:  {},
+};
+
+const SOUND = {
+  base:  { whine: [900, 3300], wq: 6, wg: 1, howl: 0, hg: 0, roar: 1, rumble: 1, crackle: 1 },
+  F110:  {},
+  F100:  { whine: [950, 3600], crackle: 1.2 },
+  F119:  { whine: [700, 2600], roar: 1.15, rumble: 1.3 },
+  F135:  { whine: [650, 2400], roar: 1.35, rumble: 1.45 },
+  F414:  { whine: [1000, 3500] },
+  J79:   { whine: [1200, 2900], howl: 1900, hg: 1, crackle: 1.4 },
+  AL41:  { whine: [800, 3000], rumble: 1.3 },
+  RD33:  { whine: [1000, 3500] },
+  D30:   { whine: [600, 2400], roar: 1.2, rumble: 1.5 },
+  R25:   { whine: [1100, 2800], howl: 1500, hg: 0.6, crackle: 1.5 },
+  EJ200: { whine: [1100, 3800] },
+  M88:   { whine: [1100, 3600] },
+  RM12:  { whine: [1000, 3400] },
+  WS10:  { whine: [800, 3000] },
+  M53:   { whine: [1300, 3200], wg: 1.4 },
+  RB199: { whine: [1400, 4200], wg: 1.3 },
+  F101:  { rumble: 1.2 },
+  NK32:  { whine: [700, 2600], roar: 1.2, rumble: 1.5 },
+  NK25:  { whine: [700, 2700], rumble: 1.4 },
+  TF33:  { whine: [1200, 3200], roar: 1.1 },
+  OLY:   { whine: [1000, 2800], howl: 1350, hg: 1.2 },
+  // the TF34's fan gives the A-10 its "hog whistle"
+  TF34:  { whine: [2000, 5200], wq: 12, wg: 2.4, roar: 0.6 },
+  F118:  { roar: 0.85 },
+};
+
+// engine family from the engine name
+const ENGINE_FAMILY = [
+  [/F110/, 'F110'], [/F100/, 'F100'], [/F119/, 'F119'], [/F135/, 'F135'], [/F414/, 'F414'], [/J79/, 'J79'],
+  [/AL-41/, 'AL41'], [/RD-33/, 'RD33'], [/D-30F6/, 'D30'], [/R25/, 'R25'], [/EJ200/, 'EJ200'], [/M88/, 'M88'],
+  [/RM12/, 'RM12'], [/WS-10/, 'WS10'], [/M53/, 'M53'], [/RB199/, 'RB199'], [/F101/, 'F101'], [/NK-32/, 'NK32'],
+  [/NK-25/, 'NK25'], [/TF33/, 'TF33'], [/Olympus/, 'OLY'], [/TF34/, 'TF34'], [/F118/, 'F118'],
+];
+
+const GUNS = {
+  f16:     { rate: 100, cal: 20, at: [4.9, 0.4, -0.74], rotary: true },
+  f22:     { rate: 100, cal: 20, at: [7.3, 0.45, 1.2], rotary: true },
+  f35a:    { rate: 55, cal: 25, at: [6.4, 0.6, -0.95], rotary: true },
+  f15e:    { rate: 100, cal: 20, at: [8.4, 0.4, 1.3], rotary: true },
+  fa18e:   { rate: 100, cal: 20, at: [0.9, 0.36, 0], rotary: true },
+  f14d:    { rate: 100, cal: 20, at: [3.6, -0.3, -0.66], rotary: true },
+  f4e:     { rate: 100, cal: 20, at: [0.25, -0.5, 0], rotary: true },
+  su35:    { rate: 27, cal: 30, at: [6.8, 0.6, 1.1] },
+  su57:    { rate: 27, cal: 30, at: [6.9, 0.4, 1.05] },
+  mig29:   { rate: 27, cal: 30, at: [6.6, 0.55, -1.0] },
+  mig31:   { rate: 150, cal: 23, at: [11.5, -0.3, 1.5], rotary: true },
+  mig21:   { rate: 57, cal: 23, at: [6.0, -0.72, 0] },
+  typhoon: { rate: 28, cal: 27, at: [7.3, -0.3, 1.0] },
+  rafale:  { rate: 42, cal: 30, at: [6.2, -0.05, 1.25] },
+  gripen:  { rate: 28, cal: 27, at: [6.5, -0.42, -0.48] },
+  m2000:   { rate: 30, cal: 30, at: [6.9, -0.45, 0.55], pair: true },
+  tornado: { rate: 28, cal: 27, at: [3.9, -0.42, -0.5] },
+  a10:     { rate: 65, cal: 30, at: [-0.16, -0.4, 0], rotary: true, barrels: 7 },
+  tu22m3:  { rate: 57, cal: 23, at: [42.3, 0.9, 0], dir: -1, rounds: 1200 },
+  tu95:    { rate: 57, cal: 23, at: [46.0, 0.9, 0.16], dir: -1, pair: true, rounds: 1200 },
+};
+
+function fxFor(ac) {
+  if (ac._fx) return ac._fx;
+  const fam = (ENGINE_FAMILY.find(([re]) => re.test(ac.eng.name)) || [])[1];
+  const flame = { ...FLAME.base, ...(FLAME[fam] || {}) }, snd = { ...SOUND.base, ...(SOUND[fam] || {}) };
+  let gun = GUNS[ac.key] ? { dir: 1, barrels: 1, ...GUNS[ac.key] } : null;
+  if (gun && !gun.rounds) {
+    const m = /([\d,]+) rounds( each)?/.exec(ac.gun || '');
+    gun.rounds = m ? +m[1].replace(/,/g, '') * (m[2] ? 2 : 1) : 500;
+  }
+  if (gun) gun.name = (ac.gun || '').replace(/,? ?[\d,]+ rounds.*$/, '').replace(/ \(.*$/, '');
+  return (ac._fx = { fam, flame, snd, gun });
+}
+
 // ---- 40-render.js
 // CPU renderer: rasterises the mesh into a sub-cell buffer (2 x 4 samples per character cell),
 // then picks one ASCII glyph per cell whose shape best matches the 8 samples.
@@ -2181,6 +2308,7 @@ class Renderer {
 
     if (this.scene.props.length && spinning) propDiscs(this, cam, o.time);
     if (this.scene.exhausts.length) plume(this, cam, o);
+    if (o.gun) gunfire(this, cam, o);
     if (o.ground) ground(this, cam, o);
     this.resolve();
   }
@@ -2419,58 +2547,80 @@ function splat(R, cam, x, y, z, rad, er, eg, eb, lum) {
   }
 }
 
-// One plume per exhaust. Length, brightness and shock diamonds grow with the afterburner setting.
+// Afterburner length as the reheat zones light in turn (F100 and F110 light five zones in sequence).
+function abStage(ac, u) {
+  const z = ac.eng.zones;
+  if (!z || u <= 0) return u;
+  const q = u * z, k = Math.floor(q);
+  return Math.min(1, (k + smooth(0, 0.35, q - k)) / z);
+}
+
+// One plume per exhaust, shaped by the engine's profile (see 38-fx.js). Length, brightness and shock
+// diamonds grow with the afterburner setting; some engines trail smoke at dry power.
 function plume(R, cam, o) {
   const ac = R.ac, thr = o.throttle, t = o.time, ab = !!ac.eng.wet, mil = ab ? MIL : 1;
-  const ex = R.scene.exhausts, lights = [];
+  const F = fxFor(ac).flame, ex = R.scene.exhausts, lights = [];
   o.floorLights = lights;
   const budget = 7000 / Math.max(2, ex.length);
   ex.forEach((e, ei) => {
     const rad = e.r, sy = e.flat ? e.h / rad : 1, sz = e.flat ? e.w / rad : 1;
     const seed = ei * 1013;
     if (thr <= mil) {
-      // dry: a faint heat shimmer that grows with power
       const u = thr / mil;
-      if (u < 0.35) return;
-      const n = Math.floor(260 * u), Lp = rad * (3 + 4 * u), I = 0.05 * (u - 0.3);
-      for (let i = 0; i < n; i++) {
-        const h1 = hash(seed + i), h2 = hash(seed + i * 1.37 + 7), h3 = hash(seed + i * 2.11 + 3);
-        const ph = (h1 + t * 1.6) % 1, d = ph * Lp, rr = rad * (0.9 + 0.5 * ph) * Math.sqrt(h2), a = h3 * 6.2832;
-        const w = I * (1 - ph);
-        splat(R, cam, e.x - d, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.08, w * 1.0, w * 0.55, w * 0.4);
+      // dry: a faint heat shimmer that grows with power
+      if (u >= 0.35) {
+        const n = Math.floor(260 * u), Lp = rad * (3 + 4 * u), I = 0.05 * (u - 0.3);
+        for (let i = 0; i < n; i++) {
+          const h1 = hash(seed + i), h2 = hash(seed + i * 1.37 + 7), h3 = hash(seed + i * 2.11 + 3);
+          const ph = (h1 + t * 1.6) % 1, d = ph * Lp, rr = rad * (0.9 + 0.5 * ph) * Math.sqrt(h2), a = h3 * 6.2832;
+          const w = I * (1 - ph);
+          splat(R, cam, e.x - d, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.08, w * 1.0, w * 0.55, w * 0.4);
+        }
       }
+      if (F.smoke && u > 0.2) smokeTrail(R, cam, e, F.smoke * smooth(0.2, 0.8, u), t, seed);
       return;
     }
-    const u = (thr - mil) / (1 - mil), I = 0.45 + 0.55 * u;
-    const Lp = rad * lerp(6, 16, u), sp = rad * 2 * 1.25, nd = Math.round(2 + 4 * u);
+    const u = abStage(ac, (thr - mil) / (1 - mil)), I = (0.45 + 0.55 * u) * F.I;
+    const Lp = rad * lerp(F.len[0], F.len[1], u), sp = rad * 2 * F.dsp, nd = Math.round(2 + (F.dia - 2) * u);
     const n = Math.floor(budget * (0.55 + 0.45 * u)), flick = Math.floor(t * 30);
     for (let i = 0; i < n; i++) {
       const h1 = hash(seed + i), h2 = hash(seed + i * 1.37 + 7), h3 = hash(seed + i * 2.11 + 3), h4 = hash(seed + i + flick * 0.618);
       const ph = (h1 + t * 2.2) % 1, tt = ph ** 0.85, d = tt * Lp;
       const env = Math.sin(Math.PI * Math.min(1, tt * 1.4 + 0.15)) * (1 - 0.55 * tt * tt);
       const rmax = rad * (0.95 + 0.35 * env), rr = rmax * Math.sqrt(h2), a = h3 * 6.2832;
-      const core = rr < rmax * 0.45 && tt < 0.3;
-      let c;
-      if (core) c = [0.75, 0.82, 1.0];
-      else if (tt < 0.4) c = [1.0, 0.74, 0.36];
-      else if (tt < 0.7) c = [1.0, 0.47, 0.16];
-      else c = [0.85, 0.24, 0.08];
+      const c = rr < rmax * 0.45 && tt < 0.3 ? F.core : tt < 0.4 ? F.hot : tt < 0.7 ? F.mid : F.tail;
       const w = I * 0.16 * (1 - tt) ** 1.1 * (0.6 + 0.4 * (1 - rr / rmax)) * (0.7 + 0.6 * h4);
       splat(R, cam, e.x - d, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.1, c[0] * w, c[1] * w, c[2] * w);
     }
-    // Mach diamonds: bright lenses on the axis at regular spacing
+    // Mach diamonds: bright lenses on the axis at regular spacing, tinted by the core colour
     for (let k = 0; k < nd; k++) {
       const dk = sp * (k + 0.75), fade = (1 - k / (nd + 1)) * (0.6 + 0.4 * u);
+      if (dk > Lp * 0.85) break;
       for (let i = 0; i < 60; i++) {
         const h1 = hash(seed + k * 97 + i), h2 = hash(seed + k * 31 + i * 3.3), h3 = hash(seed + i * 5.1 + k + flick * 0.1);
         const along = (h1 - 0.5) * sp * 0.55, lens = 1 - Math.abs(along) / (sp * 0.28);
         if (lens <= 0) continue;
         const rr = rad * 0.5 * lens * Math.sqrt(h2), a = h3 * 6.2832, w = 0.7 * fade * I;
-        splat(R, cam, e.x - dk - along, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.09, w, w * 0.9, w * 0.72);
+        splat(R, cam, e.x - dk - along, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.09,
+          w * lerp(1, F.core[0], 0.3), w * lerp(0.9, F.core[1], 0.3), w * lerp(0.72, F.core[2], 0.4));
       }
     }
     lights.push({ x: e.x - Lp * 0.3, z: e.z, r: Lp * 0.22, i: 0.22 * I, c: [1, 0.55, 0.22] });
   });
+}
+
+// Exhaust smoke: dark, sparse puffs that spread and thin out as they drift aft. Drawn solid but dim, so
+// it reads as a light grey haze of fine glyphs rather than more airframe.
+function smokeTrail(R, cam, e, k, t, seed) {
+  const rad = e.r, L = Math.min(rad * 40, R.ac.dims.len * 1.5), n = Math.floor(2600 * k);
+  for (let i = 0; i < n; i++) {
+    const h1 = hash(seed + i * 0.91 + 11), h2 = hash(seed + i * 1.77 + 5), h3 = hash(seed + i * 2.9 + 1);
+    const ph = (h1 + t * 0.45) % 1, d = rad * 2 + ph * L, spread = rad * (0.7 + 3.2 * ph);
+    if (h3 > 0.55 * k * (1 - ph * 0.8) + 0.08) continue;   // sparse, and thinner further aft
+    const rr = spread * Math.sqrt(h2), a = hash(seed + i * 4.3) * 6.2832;
+    const g = 0.34 + 0.1 * h2;
+    splat(R, cam, e.x - d, e.y + Math.cos(a) * rr + ph * rad, e.z + Math.sin(a) * rr, 0.1, g, g, g * 1.04, 0.14 + 0.2 * (1 - ph));
+  }
 }
 
 // Spinning propellers: a translucent disc with a faint rotating blade blur.
@@ -2490,4 +2640,81 @@ function propDiscs(R, cam, time) {
   }
 }
 
-module.exports = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam };
+// ---- 46-gun.js
+// Gunfire: muzzle flash, the stream of rounds (every fifth a tracer) and propellant smoke.
+// o.gun = { bursts: [[start, end or null], ...] } in the same clock as o.time. Stateless: every round and
+// smoke puff is worked out from the burst times, so the effect is the same at any frame rate.
+const ROUND_V = 1000;   // m/s, about the muzzle velocity of 20-30 mm cannon
+
+function gunfire(R, cam, o) {
+  const G = fxFor(R.ac).gun, guns = R.scene.guns;
+  if (!G || !guns.length || !o.gun) return;
+  const t = o.time, k = G.cal / 20, dir = G.dir;
+  const lights = o.floorLights || (o.floorLights = []);
+  for (const [b0, b1] of o.gun.bursts) {
+    const end = b1 == null ? t : Math.min(t, b1), firing = b1 == null || t < b1;
+    if (t - end > 4) continue;
+    guns.forEach((m, gi) => {
+      const seed = gi * 577 + Math.floor(b0 * 10);
+      if (firing) muzzle(R, cam, m, G, k, dir, t, seed, lights);
+      rounds(R, cam, m, G, dir, b0, end, t, seed);
+      gunSmoke(R, cam, m, G, k, dir, b0, end, t, seed);
+    });
+  }
+}
+
+// Flash: a bright core and a forward cone that changes shape every shot.
+function muzzle(R, cam, m, G, k, dir, t, seed, lights) {
+  const shot = Math.floor(t * G.rate), f = 0.65 + 0.35 * hash(shot * 1.7 + seed);
+  const Lf = (0.6 + 0.9 * k) * f, n = Math.floor(420 * k);
+  for (let i = 0; i < n; i++) {
+    const h1 = hash(shot * 3.1 + i * 1.3 + seed), h2 = hash(shot * 5.3 + i * 2.1), h3 = hash(shot + i * 7.7);
+    const along = h1 * h1 * Lf, rr = 0.08 * k * (1 + 3 * along / Lf) * Math.sqrt(h2), a = h3 * 6.2832;
+    const hot = 1 - along / Lf, w = 0.9 * hot * f;
+    splat(R, cam, m.x + dir * along, m.y + Math.cos(a) * rr, m.z + Math.sin(a) * rr, 0.1,
+      w * 1.0, w * lerp(0.42, 0.78, hot), w * lerp(0.06, 0.3, hot * hot));
+  }
+  lights.push({ x: m.x + dir * Lf * 0.4, z: m.z, r: 1.5 + 2 * k, i: 0.35 * f, c: [1, 0.7, 0.35] });
+}
+
+// Rounds in flight within 150 m, drawn as motion-blurred streaks; every fifth is a tracer.
+function rounds(R, cam, m, G, dir, b0, end, t, seed) {
+  const maxD = 150, dt = 1 / G.rate, blur = ROUND_V / 30 * 0.7;
+  const j0 = Math.max(0, Math.ceil((t - maxD / ROUND_V - b0) / dt)), j1 = Math.floor((end - b0) / dt);
+  for (let j = j0; j <= j1; j++) {
+    const age = t - (b0 + j * dt);
+    if (age < 0) continue;
+    const d = age * ROUND_V, tracer = j % 5 === 0;
+    if (d - blur > maxD) continue;
+    const ey = (hash(j * 3.3 + seed) - 0.5) * 0.006, ez = (hash(j * 7.1 + seed) - 0.5) * 0.006;
+    const len = Math.min(blur, d), steps = Math.ceil(len / 0.15);
+    for (let s = 0; s < steps; s++) {
+      const dd = d - len * s / steps, fade = 1 - s / steps;
+      const w = (tracer ? 1.6 : 0.5) * fade * (1 - dd / maxD);
+      if (w <= 0.01) continue;
+      splat(R, cam, m.x + dir * dd, m.y + ey * dd, m.z + ez * dd, 0.06 * G.cal / 10,
+        w, w * (tracer ? 0.5 : 0.72), w * (tracer ? 0.16 : 0.4));
+    }
+  }
+}
+
+// Propellant smoke: a translucent haze puffed out just ahead of the muzzle that spreads and streams back
+// over the nose (the A-10's gun smoke famously envelops the forward fuselage).
+function gunSmoke(R, cam, m, G, k, dir, b0, end, t, seed) {
+  const rate = 30, life = 3, i0 = Math.max(0, Math.floor((t - life - b0) * rate)), i1 = Math.floor((end - b0) * rate);
+  for (let i = i0; i <= i1; i++) {
+    const age = t - (b0 + i / rate);
+    if (age < 0 || age > life) continue;
+    const u = age / life, h1 = hash(i * 1.9 + seed), h2 = hash(i * 3.7 + seed + 1);
+    const push = (0.8 + 1.2 * h1) * k * (1 - Math.exp(-age * 6)), drift = 3 * age + 2.5 * age * age;
+    const cx = m.x + dir * (push - drift), cy = m.y + 0.35 * age + (h2 - 0.5) * 0.3, cz = m.z + (h1 - 0.5) * 0.9 * age;
+    const r = (0.25 + 1.2 * u) * k, puffs = 18, w0 = 0.035 * (1 - u) ** 1.2;
+    for (let p = 0; p < puffs; p++) {
+      const q1 = hash(i * 13 + p * 1.3 + seed), q2 = hash(i * 17 + p * 2.9), q3 = hash(i * 19 + p * 4.1), a = q3 * 6.2832;
+      const rr = r * Math.sqrt(q2), w = w0 * (0.6 + 0.8 * q1);
+      splat(R, cam, cx + (q1 - 0.5) * r * 1.5, cy + Math.cos(a) * rr, cz + Math.sin(a) * rr, 0.14, w, w * 0.98, w * 0.95);
+    }
+  }
+}
+
+module.exports = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam, fxFor };

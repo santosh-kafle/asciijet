@@ -312,7 +312,7 @@ async function start() {
   const key = (location.hash || '').slice(1);
   selectAircraft(AIRCRAFT.some(a => a.key === key) ? key : 'f22', false);
   renderTray();
-  window.__jet = { state, cam, selectAircraft, setView, setLoadout, R: () => R, scene: () => scene };
+  window.__jet = { state, cam, selectAircraft, setView, setLoadout, fire, fxFor, audio, keys: AIRCRAFT.map(a => a.key), R: () => R, scene: () => scene };
   // opening moment: spool up and light the afterburner
   state.thrTarget = 1; intro = 3;
   requestAnimationFrame(frame);

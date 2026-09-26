@@ -13,6 +13,7 @@ const state = {
   thr: 0, thrTarget: 0, bays: false,
   labels: store.get('labels', true), ground: store.get('ground', true), spin: true,
   gear: store.get('gear', true), detail: 3,   // always maximum quality
+  gun: { firing: false, bursts: [], ammo: 0 },
   sweep: null, fuel: 1, tab: 'loadout', cat: 'All', q: '', sort: 'cat', cmp: store.get('cmp', []), hl: 0, hover: 0,
 };
 const cam = { yaw: 2.3, pitch: 0.32, zoom: 1, tyaw: 2.3, tpitch: 0.32, tzoom: 1, drag: false, idle: 0, ext: 0 };
@@ -37,6 +38,7 @@ function selectAircraft(key, push = true) {
   const ac = AIRCRAFT.find(a => a.key === key) || AIRCRAFT[0];
   state.ac = ac; state.loadIdx = 0; state.load = { ...(ac.loadouts[0]?.set || {}) }; state.custom = false;
   state.sweep = ac.sweep ? ac.sweep.def : null; state.hl = 0; state.bays = false;
+  fire(false); state.gun = { firing: false, bursts: [], ammo: fxFor(ac).gun?.rounds || 0 };
   fitFuel();
   if (state.thrTarget > milPos()) state.thrTarget = milPos();
   if (push) try { history.replaceState(null, '', '#' + ac.key); } catch { }
@@ -116,24 +118,34 @@ function frame(t) {
   const fit = Math.min(fr.w * 1.12, fr.h * 1.4) / 2;
   // keep a lit afterburner plume in frame: shift the target aft and widen the fit
   const mil = milPos(), abU = hasAB() ? clamp((state.thr - mil) / (1 - mil), 0, 1) : 0;
-  const ext = scene.exhausts.length ? Math.max(...scene.exhausts.map(e => e.r)) * lerp(6, 16, abU) * (abU > 0 ? 1 : 0) : 0;
+  const FL = fxFor(state.ac).flame;
+  const ext = scene.exhausts.length ? Math.max(...scene.exhausts.map(e => e.r)) * lerp(FL.len[0], FL.len[1], abU) * (abU > 0 ? 1 : 0) : 0;
   cam.ext += ((ext) - (cam.ext || 0)) * Math.min(1, dt * 3);
-  const Reff = Math.max(scene.R, state.ac.dims.len / 2 + cam.ext / 2);
+  // while the gun fires, widen the view on the muzzle side so the stream of rounds shows
+  const Gf = fxFor(state.ac).gun, gext = Gf && state.gun.bursts.some(b => b[1] == null || tNow - b[1] < 1.5) ? state.ac.dims.len * 0.7 * Gf.dir : 0;
+  cam.gext = (cam.gext || 0) + (gext - (cam.gext || 0)) * Math.min(1, dt * 3);
+  const Reff = Math.max(scene.R, state.ac.dims.len / 2 + cam.ext / 2 + Math.abs(cam.gext) / 2);
   const dist = Reff * focCss / fit * cam.zoom;
   const ox = ((fr.x + fr.w / 2) - geom.w / 2) / geom.cw * SX, oy = ((fr.y + fr.h / 2) - geom.h / 2) / geom.ch * SY;
-  const c = makeCam({ yaw: cam.yaw, pitch: cam.pitch, dist, target: [-(cam.ext || 0) / 2, 0, 0], W: cols * SX, H: rows * SY, fov, ox, oy });
+  const c = makeCam({ yaw: cam.yaw, pitch: cam.pitch, dist, target: [(-(cam.ext || 0) + cam.gext) / 2, 0, 0], W: cols * SX, H: rows * SY, fov, ox, oy });
   lastCam = c;
   if ((audioTick += dt) > 0.033) {
     audioTick = 0;
     const e = state.ac.eng, rear = clamp(-Math.cos(cam.yaw) * Math.cos(cam.pitch) * 0.5 + 0.5, 0, 1);
     audio.update({ thr: state.thr, mil, ab: hasAB(), n: e.n, big: state.ac.cat === 'Bomber', rear, zoom: cam.zoom,
-      type: e.type === 'turboprop' ? 'turboprop' : (e.bypass || 0) >= 0.7 && !e.wet ? 'fan' : 'jet' });
+      type: e.type === 'turboprop' ? 'turboprop' : (e.bypass || 0) >= 0.7 && !e.wet ? 'fan' : 'jet', snd: fxFor(state.ac).snd });
   }
-  if (sheet.open) { drawSheet(dt); return; }
-  R.render(c, { throttle: state.thr, time: tNow, ground: state.ground, groundY: scene.groundY, groundR: scene.R * 2.6, groundStep: scene.R > 18 ? 5 : 2, spin: state.thr > 0.03 });
+  const gs = state.gun, G = fxFor(state.ac).gun;
+  if (gs.firing) {
+    gs.ammo = Math.max(0, gs.ammo - G.rate * (G.pair ? 2 : 1) * dt);
+    if (!gs.ammo) fire(false);
+  }
+  gs.bursts = gs.bursts.filter(b => b[1] == null || tNow - b[1] < 4);
+  if (sheet.open) { fire(false); drawSheet(dt); return; }
+  R.render(c, { throttle: state.thr, time: tNow, gun: gs.bursts.length ? gs : null, ground: state.ground, groundY: scene.groundY, groundR: scene.R * 2.6, groundStep: scene.R > 18 ? 5 : 2, spin: state.thr > 0.03 });
   drawGrid(ctx, R, geom, state.hl || state.hover);
   placeLabels(c);
-  if ((uiTick += dt) > 0.1) { uiTick = 0; liveReadouts(); }
+  if ((uiTick += dt) > 0.1) { uiTick = 0; liveReadouts(); if (state.gun.firing) renderGun(); }
 }
 
 // Glyphs are batched by colour so each fillStyle is set once per frame.
@@ -270,6 +282,11 @@ function initControls() {
 
   $('#thr').addEventListener('input', e => { state.thrTarget = e.target.value / 1000; intro = 0; });
   $('#abBtn').onclick = toggleAB;
+  const gb = $('#gunBtn');
+  gb.addEventListener('pointerdown', e => { e.preventDefault(); gb.setPointerCapture(e.pointerId); fire(true); });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) gb.addEventListener(ev, () => fire(false));
+  addEventListener('keyup', e => { if (e.key.toLowerCase() === 'f') fire(false); });
+  addEventListener('blur', () => fire(false));
   $('#baysBtn').onclick = () => { state.bays = !state.bays; rebuild(); syncButtons(); audio.bay(state.bays); };
   $('#labBtn').onclick = () => { state.labels = !state.labels; store.set('labels', state.labels); syncButtons(); };
   $('#grdBtn').onclick = () => { state.ground = !state.ground; store.set('ground', state.ground); syncButtons(); };
@@ -298,7 +315,8 @@ function initControls() {
     if (k === '/') { e.preventDefault(); $('#index').classList.add('open'); $('#q').focus(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = k.toLowerCase();
-    if (key === 'a') toggleAB();
+    if (key === 'f') { if (!e.repeat) fire(true); }
+    else if (key === 'a') toggleAB();
     else if (key === 'w') { state.thrTarget = clamp(state.thrTarget + 0.05, 0, 1); intro = 0; }
     else if (key === 's') { state.thrTarget = clamp(state.thrTarget - 0.05, 0, 1); intro = 0; }
     else if (key === 'b') $('#baysBtn').click();
@@ -319,6 +337,28 @@ function initControls() {
     }
   });
   addEventListener('resize', () => { resize(); });
+}
+
+// Gun: hold F or the Gun button. Each press is a burst; the effects are drawn from the burst times.
+function fire(on) {
+  const gs = state.gun, G = state.ac && fxFor(state.ac).gun;
+  if (!gs) return;
+  if (on && G && !gs.firing) {
+    if (gs.ammo <= 0) { gs.ammo = G.rounds; renderGun(); return; }   // empty: a press reloads
+    gs.firing = true; gs.bursts.push([tNow, null]); audio.gun(true, G);
+  } else if (!on && gs.firing) {
+    gs.firing = false; const b = gs.bursts[gs.bursts.length - 1]; if (b) b[1] = tNow; audio.gun(false, G);
+  }
+  renderGun();
+}
+function renderGun() {
+  const G = state.ac && fxFor(state.ac).gun, gs = state.gun, b = $('#gunBtn');
+  b.hidden = !G;
+  if (!G) return;
+  b.classList.toggle('on', gs.firing);
+  b.firstChild.textContent = gs.ammo <= 0 ? 'Reload ' : 'Gun ';
+  $('#ammo').textContent = gs.ammo <= 0 ? '' : fmt(Math.ceil(gs.ammo));
+  b.title = `${G.name}: ${fmt(G.rate * 60)} rounds a minute${G.pair ? ' per gun, two guns' : ''}${G.dir < 0 ? ', firing aft' : ''}. Hold to fire.`;
 }
 
 function toggleAB() {
@@ -347,6 +387,7 @@ function syncButtons() {
   $('#abBtn').classList.toggle('on', ab ? state.thrTarget > MIL : state.thrTarget > 0.5);
   const sw = state.ac.sweep;
   $('#sweepBox').hidden = !sw;
+  renderGun();
   if (sw) { $('#sweep').value = Math.round((state.sweep - sw.min) / (sw.max - sw.min) * 100); $('#sweepVal').textContent = Math.round(state.sweep) + '°'; }
 }
 

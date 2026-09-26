@@ -109,8 +109,12 @@ function buildScene(ac, o = {}) {
         panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
+      else if (p.t === 'gatling') gatling(M, p, L);
     }
   }
+
+  // Gun muzzle(s) in aircraft space, for the firing effects
+  const G = fxFor(ac).gun, guns = !G ? [] : (G.pair ? [1, -1] : [1]).map(sg => ({ x: L / 2 - G.at[0], y: G.at[1], z: G.at[2] * sg }));
 
   // Floor height from the published height: the tallest point of the airframe (fin tip) stands
   // dims.height above the ground.
@@ -189,7 +193,7 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY, groundY };
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {
@@ -323,6 +327,21 @@ function markings(M, ac, panels) {
     const lift = (afT(0.45) - Math.min(afT(Math.max(0.01, 0.45 - u)), afT(Math.min(0.99, 0.45 + u)))) * tt * ch + 0.02;
     for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), r, ins.wing, lift);
   }
+}
+
+// Rotary cannon seen from outside (the A-10's GAU-8): a ring of barrels held by a muzzle clamp and a
+// mid-barrel support, running back into the nose. s0 muzzle, s1 where the barrels enter the fuselage.
+function gatling(M, p, L) {
+  const x0 = L / 2 - p.s0, x1 = L / 2 - p.s1, tf = (a, b, c) => [a, b + p.y, c + (p.z || 0)];
+  for (let i = 0; i < p.n; i++) {
+    const a = i / p.n * Math.PI * 2, by = Math.cos(a) * p.rc, bz = Math.sin(a) * p.rc;
+    loft(M, [[0, p.rb, p.rb, p.rb, by, 2], [x0 - x1, p.rb * 1.1, p.rb * 1.1, p.rb * 1.1, by, 2]],
+      { x0, seg: 6, mat: 'metal', capF: 'hole', tf: (q, b, c) => tf(q, b, c + bz) });
+  }
+  const R = p.rc + p.rb + 0.02;
+  for (const [ds, w] of [[0.05, 0.05], [(p.s1 - p.s0) * 0.45, 0.04]])
+    loft(M, [[0, R, R, R], [w, R, R, R]], { x0: x0 - ds, seg: 14, mat: 'dark', capF: 'dark', capB: 'dark', tf });
+  loft(M, [[0, p.rc * 0.45, p.rc * 0.45, p.rc * 0.45], [x0 - x1, p.rc * 0.45, p.rc * 0.45, p.rc * 0.45]], { x0: x0 - 0.02, seg: 8, mat: 'dark', tf });
 }
 
 // ---- landing gear: struts and wheels down to the floor

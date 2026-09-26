@@ -19,6 +19,8 @@ Open `dist/index.html` in a browser. It is one self-contained file with no depen
 | **Propellers** | The Tu-95's contra-rotating propellers spin as a blurred disc when running. |
 | **Loadout sheet** | Press **O**: a stores loading chart from left wingtip to right wingtip, totals by category, every weapon the aircraft is cleared for, and a detail card with a rotating ASCII model of the weapon: guidance, range, top speed, warhead, propulsion, maker, year and which other aircraft carry it. |
 | **Sound** | Press **M**. Synthesised live with Web Audio, no audio files: turbine whine and jet roar that follow the throttle and spool, afterburner light-off thump with rumble and crackle, the beating drone of the Tu-95's contra-rotating propellers, bay-door hydraulics and a latch click when stores change. Louder from behind the engines. |
+| **Engine character** | Each engine family has its own flame and sound (`src/38-fx.js`): flame length, colour and Mach-diamond spacing; reheat zones lighting in sequence on the F100 and F110; dry-power smoke trails from the J79, RD-33, TF33 and Olympus that burn off in reheat; the J79 and Vulcan intake howl, the A-10's TF34 "hog whistle", the deeper roar of the F135 and the big Russian engines, and beating between engines on twins and bombers. |
+| **Guns** | Hold **F** (or the Gun button) to fire at the real rate of fire, with muzzle flash, a tracer stream (one round in five), gun smoke and a live ammunition count; press again when empty to reload. The sound is one shot looped at the gun's rate, so the A-10's GAU-8 at 3,900 rounds a minute gives its 65 Hz "BRRRT" and single-barrel cannon give separate bangs. The A-10 carries a modelled seven-barrel GAU-8 cluster. Tail guns on the Tu-95 and Tu-22M3 fire aft. |
 | **Systems and history** | Radar, sensors, electronic warfare, unit cost, operators, combat record and variants for every aircraft. |
 | **Visual detail** | Always drawn at maximum quality: about 340 character columns on a desktop screen and dense meshes. Canopies are seated on each fuselage's spine at their real height. Ink lines outline where parts meet and mark control-surface hinges and fuselage panel seams. Each aircraft wears its paint scheme (F-4 Southeast Asia camouflage, Su-35 blue splinter, Tornado and Vulcan green and grey, lighter undersides) and its national markings (US stars, Soviet and Russian red stars on wings and fins, French, British and Swedish roundels, Chinese stars). |
 | **Landing gear** | Struts and wheels (**U**) from each aircraft's layout: the B-52's bicycle gear and outriggers, the A-10's wing pods, four-wheel bogies on the bombers. The floor sits at each aircraft's published height below the fin tip. |
@@ -27,7 +29,7 @@ Open `dist/index.html` in a browser. It is one self-contained file with no depen
 
 ## Controls
 
-drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **1-6** views · **B** bays · **L** labels · **G** floor · **Space** orbit · **[ ]** loadouts · **← →** aircraft · **/** search · **C** compare · **O** loadout sheet · **M** sound · **U** gear
+drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **1-6** views · **B** bays · **L** labels · **G** floor · **Space** orbit · **[ ]** loadouts · **← →** aircraft · **/** search · **C** compare · **O** loadout sheet · **M** sound · **U** gear · **F** (hold) gun
 
 ## Build
 
@@ -51,7 +53,8 @@ node tools/contact.cjs         # all aircraft on contact sheets (top | side | fr
 | `src/20-stores.js`, `src/22-store-extra.js` | the weapons, tanks and pods, their meshes, speed, warhead and propulsion |
 | `src/30-scene.js` | stations, rack arrangement, bay cut-outs, weight and engine model |
 | `src/35-aircraft.js`, `src/36-bombers.js`, `src/37-details.js` | the aircraft, and their systems and programme details |
-| `src/40-render.js`, `src/45-plume.js` | rasteriser, glyph resolve, floor, shadow, afterburner, propellers |
+| `src/38-fx.js` | per-engine flame and sound profiles, gun data (rate, calibre, muzzle position) |
+| `src/40-render.js`, `src/45-plume.js`, `src/46-gun.js` | rasteriser, glyph resolve, floor, shadow, afterburner and smoke, propellers, gunfire |
 | `src/50-*.js` to `src/99-start.js` | the page: glyph matcher, sound, viewer loop, controls, panels, loadout sheet |
 
 Files numbered below 50 have no DOM, so `dist/engine.cjs` runs in node.

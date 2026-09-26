@@ -146,6 +146,7 @@ class Renderer {
 
     if (this.scene.props.length && spinning) propDiscs(this, cam, o.time);
     if (this.scene.exhausts.length) plume(this, cam, o);
+    if (o.gun) gunfire(this, cam, o);
     if (o.ground) ground(this, cam, o);
     this.resolve();
   }

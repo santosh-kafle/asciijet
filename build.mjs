@@ -29,6 +29,6 @@ fs.writeFileSync(path.join(DIST, 'index.html'),
   `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n${head}\n</head>\n<body>\n${body}\n${script}</body>\n</html>\n`);
 fs.writeFileSync(path.join(DIST, 'artifact.html'), `${head}\n${body}\n${script}`);
 fs.writeFileSync(path.join(DIST, 'engine.cjs'),
-  `'use strict';\n${cat(engine)}\nmodule.exports = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam };\n`);
+  `'use strict';\n${cat(engine)}\nmodule.exports = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam, fxFor };\n`);
 const kb = f => (fs.statSync(path.join(DIST, f)).size / 1024).toFixed(0) + ' KB';
 console.log(`built ${list.length} scripts -> dist/index.html (${kb('index.html')}), dist/artifact.html, dist/engine.cjs`);
