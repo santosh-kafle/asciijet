@@ -20,14 +20,14 @@ Open `dist/index.html` in a browser. It is one self-contained file with no depen
 | **Loadout sheet** | Press **O**: a stores loading chart from left wingtip to right wingtip, totals by category, every weapon the aircraft is cleared for, and a detail card with a rotating ASCII model of the weapon: guidance, range, top speed, warhead, propulsion, maker, year and which other aircraft carry it. |
 | **Sound** | Press **M**. Synthesised live with Web Audio, no audio files: turbine whine and jet roar that follow the throttle and spool, afterburner light-off thump with rumble and crackle, the beating drone of the Tu-95's contra-rotating propellers, bay-door hydraulics and a latch click when stores change. Louder from behind the engines. |
 | **Systems and history** | Radar, sensors, electronic warfare, unit cost, operators, combat record and variants for every aircraft. |
-| **Visual detail** | Four detail levels (**D**): Ultra draws about 360 columns and denser meshes. Ink lines outline where parts meet and mark control-surface hinges and fuselage panel seams. Each aircraft wears its paint scheme (F-4 Southeast Asia camouflage, Su-35 blue splinter, Tornado and Vulcan green and grey, lighter undersides) and its national markings (US stars, Soviet and Russian red stars on wings and fins, French, British and Swedish roundels, Chinese stars). |
+| **Visual detail** | Always drawn at maximum quality: about 340 character columns on a desktop screen and dense meshes. Canopies are seated on each fuselage's spine at their real height. Ink lines outline where parts meet and mark control-surface hinges and fuselage panel seams. Each aircraft wears its paint scheme (F-4 Southeast Asia camouflage, Su-35 blue splinter, Tornado and Vulcan green and grey, lighter undersides) and its national markings (US stars, Soviet and Russian red stars on wings and fins, French, British and Swedish roundels, Chinese stars). |
 | **Landing gear** | Struts and wheels (**U**) from each aircraft's layout: the B-52's bicycle gear and outriggers, the A-10's wing pods, four-wheel bogies on the bombers. The floor sits at each aircraft's published height below the fin tip. |
 | **Compare** | Add up to four aircraft (**C**) and compare them side by side. |
 | **Store inspector** | Hover any weapon for its name, mass, size, guidance and range; click to highlight its station. |
 
 ## Controls
 
-drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **1-6** views · **B** bays · **L** labels · **G** floor · **Space** orbit · **[ ]** loadouts · **← →** aircraft · **/** search · **C** compare · **O** loadout sheet · **M** sound · **U** gear · **D** detail
+drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **1-6** views · **B** bays · **L** labels · **G** floor · **Space** orbit · **[ ]** loadouts · **← →** aircraft · **/** search · **C** compare · **O** loadout sheet · **M** sound · **U** gear
 
 ## Build
 

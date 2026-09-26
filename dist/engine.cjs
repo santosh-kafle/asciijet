@@ -551,6 +551,7 @@ function buildScene(ac, o = {}) {
       M.part();
       if (p.t === 'loft') {
         let st = p.st;
+        if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
           const out = [st[0]];
           for (let i = 1; i < st.length; i++) {
@@ -782,6 +783,29 @@ function markings(M, ac, panels) {
 
 // ---- landing gear: struts and wheels down to the floor
 
+// Canopy seated on the fuselage top line: keeps the authored length and width, raises the bubble
+// to the given height above the spine (windscreen steeper than the rear).
+function fuselageTop(ac, s) {
+  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
+  const st = f.st;
+  if (s <= st[0][0]) return (st[0][4] || 0) + st[0][2];
+  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
+    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
+    return lerp((st[i][4] || 0) + st[i][2], (st[i + 1][4] || 0) + st[i + 1][2], u);
+  }
+  return (st[st.length - 1][4] || 0) + st[st.length - 1][2];
+}
+function bubbleStations(ac, st, h) {
+  const s0 = st[0][0], s1 = st[st.length - 1][0], w = Math.max(...st.map(x => x[1])), out = [];
+  for (let i = 0; i <= 12; i++) {
+    const u = i / 12, pk = 0.32;
+    const prof = u < pk ? Math.sin(u / pk * Math.PI / 2) ** 0.7 : Math.cos((u - pk) / (1 - pk) * Math.PI / 2) ** 0.55;
+    const s = lerp(s0, s1, u), base = fuselageTop(ac, s) - 0.08;
+    out.push([s, Math.max(0.03, w * (0.35 + 0.65 * prof ** 0.6)), Math.max(0.02, h * prof), 0.08, base, 2.2]);
+  }
+  return out;
+}
+
 function fuselageBottom(ac, s) {
   const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
   const st = f.st;
@@ -895,12 +919,12 @@ A({
   gun: 'M61A2 Vulcan 20 mm, 480 rounds', hard: '3 internal bays (main, two side), 4 underwing', payload: 9100,
   fact: 'The first fighter to combine stealth, supercruise and thrust vectoring. Its weapons ride in three internal bays, and the AMRAAMs are pushed clear of the airflow on hydraulic launchers before they fire.',
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, -0.1, 2], [1.0, 0.36, 0.3, 0.26, -0.06, 1.6], [2.4, 0.62, 0.48, 0.42, 0, 1.6], [3.8, 0.8, 0.6, 0.52, 0.04, 1.6], [5.6, 1.15, 0.68, 0.58, 0.04, 1.7], [7.4, 1.95, 0.7, 0.6, 0, 1.8], [10.5, 2.25, 0.72, 0.6, 0, 1.9], [13.5, 2.05, 0.62, 0.52, 0, 1.9], [16.2, 1.6, 0.46, 0.42, 0, 2.1], [18.0, 1.3, 0.36, 0.32, 0, 2.4]], { capF: 'dark' }),
+    fus([[0, 0.03, 0.03, 0.03, -0.1, 2], [1.0, 0.36, 0.3, 0.26, -0.06, 1.6], [2.4, 0.62, 0.48, 0.42, 0, 1.6], [3.8, 0.8, 0.66, 0.56, 0.04, 1.6], [5.6, 1.15, 0.78, 0.66, 0.04, 1.7], [7.4, 1.95, 0.86, 0.7, 0, 1.8], [10.5, 2.25, 0.86, 0.7, 0, 1.9], [13.5, 2.05, 0.74, 0.6, 0, 1.9], [16.2, 1.6, 0.46, 0.42, 0, 2.1], [18.0, 1.3, 0.36, 0.32, 0, 2.4]], { capF: 'dark' }),
     pod([[5.3, 0.5, 0.55, 0.55, -0.15, 1.5], [6.8, 0.6, 0.6, 0.58, -0.1, 1.7], [8.6, 0.5, 0.5, 0.5, -0.05, 2]], 1.55, { capF: 'hole' }),
     canopy([[2.8, 0.05, 0.02, 0.02, 0.5], [3.6, 0.4, 0.42, 0.05, 0.56], [5.0, 0.45, 0.5, 0.05, 0.6], [6.6, 0.32, 0.34, 0.05, 0.62], [7.8, 0.06, 0.06, 0.02, 0.62]], { mat: 'gold' }),
     wing('wing', trap(7.8, -0.05, 1.9, 8.4, 6.78, 42, 1.9, -3.25, 0.045)),
     surf(trap(15.3, -0.15, 1.7, 3.4, 4.45, 42, 1.3, 0, 0.04)),
-    surf(vfin(13.0, 0.55, 1.45, 3.9, 2.9, 23, 1.4, 28, 0.045)),
+    surf(vfin(13.0, 0.66, 1.45, 3.9, 2.9, 23, 1.4, 28, 0.045)),
     noz({ shape: '2d', s: 18.92, z: 0.62, w: 0.52, h: 0.34, len: 1.3, mirror: true }),
   ],
   stations: [
@@ -966,7 +990,7 @@ A({
   gun: 'M61A1 Vulcan 20 mm, 510 rounds', hard: '2 wing pylons (with 4 missile rails), 12 conformal tank stations, centreline, 2 pod mounts', payload: 10400,
   fact: 'A two-seat strike version of the air superiority Eagle. Conformal fuel tanks hug the intakes and carry bombs in rows, so the wing pylons stay free for fuel and missiles.',
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.42, 0.42, 0, 2], [2.8, 0.62, 0.62, 0.6, 0.05, 2], [4.5, 0.72, 0.72, 0.62, 0.12, 2.2], [6.5, 0.8, 0.75, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.55, 0.5, 0, 3], [15.5, 1.35, 0.5, 0.5, 0, 3], [17.8, 1.25, 0.45, 0.45, 0, 3]], { capF: 'dark' }),
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.42, 0.42, 0, 2], [2.8, 0.62, 0.62, 0.6, 0.05, 2], [4.5, 0.72, 0.72, 0.62, 0.12, 2.2], [6.5, 0.8, 0.75, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.55, 0.5, 0, 3], [15.5, 1.35, 0.5, 0.5, 0, 3], [17.8, 1.25, 0.45, 0.45, 0, 3], [18.6, 1.2, 0.42, 0.42, 0, 3]], { capF: 'dark' }),
     pod([[5.6, 0.55, 0.62, 0.62, -0.2, 4], [7, 0.58, 0.62, 0.62, -0.15, 4], [10, 0.55, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.45, { capF: 'hole' }),
     pod([[7.5, 0.1, 0.1, 0.1, -0.5, 2], [8.5, 0.42, 0.42, 0.42, -0.5, 2.5], [13, 0.42, 0.42, 0.42, -0.45, 2.5], [14.5, 0.08, 0.1, 0.1, -0.4, 2]], 1.75),
     canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.42, 0.42, 0.05, 0.8], [5.5, 0.48, 0.52, 0.05, 0.86], [7.2, 0.46, 0.5, 0.05, 0.86], [8.6, 0.3, 0.25, 0.05, 0.82], [9.6, 0.08, 0.05, 0.02, 0.76]]),
@@ -1153,7 +1177,7 @@ A({
   fact: 'Russia\'s first stealth fighter keeps its missiles in two long tandem bays between widely spaced engines, with small side bays in the wing roots for dogfight missiles.',
   est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'payload', 'ferry'],
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.42, 0.38, 0, 1.6], [3.6, 0.75, 0.65, 0.55, 0.05, 1.6], [5.6, 1.0, 0.75, 0.55, 0.08, 1.7], [7.5, 1.8, 0.65, 0.45, 0, 1.9], [11, 2.1, 0.55, 0.4, 0, 2.2], [15, 1.9, 0.45, 0.35, 0, 2.2], [18, 1.4, 0.35, 0.3, 0, 2.2], [19.5, 0.8, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.42, 0.38, 0, 1.6], [3.6, 0.75, 0.65, 0.55, 0.05, 1.6], [5.6, 1.0, 0.75, 0.55, 0.08, 1.7], [7.5, 1.8, 0.72, 0.5, 0, 1.9], [11, 2.1, 0.62, 0.45, 0, 2.2], [15, 1.9, 0.45, 0.35, 0, 2.2], [18, 1.4, 0.35, 0.3, 0, 2.2], [19.5, 0.8, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
     pod([[6.8, 0.55, 0.45, 0.6, -0.65, 3], [9, 0.62, 0.5, 0.62, -0.6, 3], [13, 0.62, 0.55, 0.62, -0.5, 2.5], [17, 0.58, 0.55, 0.58, -0.4, 2], [19.2, 0.56, 0.56, 0.56, -0.35, 2]], 1.35, { capF: 'hole' }),
     canopy([[3.0, 0.05, 0.02, 0.02, 0.62], [3.8, 0.4, 0.42, 0.05, 0.7], [5.3, 0.45, 0.5, 0.05, 0.75], [6.8, 0.3, 0.3, 0.05, 0.75], [8.0, 0.05, 0.05, 0.02, 0.72]]),
     wing('wing', [[5.5, 0.0, 1.1, 11.0, 0.02], [8.8, 0.0, 2.4, 8.2, 0.035], [13.8, 0.0, 6.9, 1.9, 0.04]]),
@@ -1397,13 +1421,13 @@ A({
   fact: 'A long, heavy canard delta built for range. Its side bays swing their missiles out on rails before the doors shut, so it can fire short-range missiles with the bay closed.',
   est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'ferry', 'payload', 'eng', 'wingArea', 'vmax'],
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.5, 0.42, 0.38, 0, 1.6], [3.8, 0.78, 0.65, 0.55, 0.05, 1.6], [5.8, 1.0, 0.75, 0.55, 0.08, 1.7], [8, 1.6, 0.65, 0.5, 0, 1.8], [12, 1.9, 0.55, 0.45, 0, 2], [16, 1.7, 0.45, 0.4, 0, 2.1], [18.8, 1.3, 0.38, 0.35, 0, 2.3], [19.8, 1.1, 0.35, 0.33, 0, 2.3]], { capF: 'dark' }),
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.5, 0.42, 0.38, 0, 1.6], [3.8, 0.78, 0.65, 0.55, 0.05, 1.6], [5.8, 1.0, 0.8, 0.6, 0.08, 1.7], [8, 1.6, 0.8, 0.62, 0, 1.8], [12, 1.9, 0.72, 0.58, 0, 2], [16, 1.7, 0.58, 0.5, 0, 2.1], [18.8, 1.3, 0.38, 0.35, 0, 2.3], [19.8, 1.1, 0.35, 0.33, 0, 2.3]], { capF: 'dark' }),
     pod([[5.6, 0.45, 0.5, 0.55, -0.1, 1.6], [7.2, 0.52, 0.52, 0.55, -0.08, 1.8], [9.5, 0.45, 0.45, 0.45, -0.05, 2]], 1.25, { capF: 'hole' }),
     canopy([[3.2, 0.05, 0.02, 0.02, 0.6], [4.0, 0.4, 0.42, 0.05, 0.7], [5.6, 0.45, 0.5, 0.05, 0.75], [7.2, 0.3, 0.3, 0.05, 0.75], [8.4, 0.05, 0.05, 0.02, 0.72]], { mat: 'gold' }),
     surf(trap(7.2, 0.25, 1.2, 2.4, 3.5, 50, 0.8, 0, 0.04)),
     wing('wing', [[8.0, 0.05, 1.3, 9.0, 0.02], [10.4, 0.0, 2.3, 7.0, 0.035], [14.4, 0.0, 6.44, 1.9, 0.04]]),
     surf(vfin(15.8, -0.4, 0.95, 2.0, 0.7, 55, 1.0, 150, 0.04)),
-    surf(vfin(15.2, 0.4, 1.1, 2.8, 2.2, 45, 1.2, 30, 0.04)),
+    surf(vfin(15.2, 0.52, 1.1, 2.8, 2.2, 45, 1.2, 30, 0.04)),
     noz({ s: 20.4, z: 0.62, r: 0.55, len: 1.3, mirror: true }),
   ],
   stations: [
@@ -1585,7 +1609,7 @@ A({
     wing('wing', [[18.8, 0.3, 6.6, 6.5, 0.08], [22.63, 0.3, 20.9, 2.2, 0.07]], { pivot: [21.5, 6.6], sweep: { def: 15 } }),
     pod([[21, 1.55, 0.9, 0.95, -1.9, 4], [23, 1.65, 1.0, 1.0, -1.8, 3.5], [29, 1.6, 1.0, 1.0, -1.7, 3], [32.6, 1.5, 0.9, 0.9, -1.6, 2.5]], 3.3, { capF: 'hole' }),
     { t: 'panel', sec: vfin(35.5, 1.3, 0, 7.2, 5.8, 45, 3.0, 0, 0.07) },
-    surf(trap(38.8, 3.4, 0.3, 4.8, 6.85, 40, 1.8, 0, 0.07)),
+    surf(trap(38.8, 1.75, 0.3, 4.8, 6.85, 40, 1.8, 0, 0.07)),
     ...[2.55, 4.05].map(z => noz({ s: 33.4, z, y: -1.6, r: 0.62, len: 1.0, mirror: true })),
   ],
   stations: [
@@ -1771,25 +1795,25 @@ A({
 // ---- 37-details.js
 // Systems and programme details per aircraft. Costs are unit flyaway in the year given unless stated.
 const DETAILS = {
-  f16: { radar: 'AN/APG-68(V)9 pulse-Doppler; upgraded jets carry the AN/APG-83 SABR AESA', sensors: 'Sniper or LITENING targeting pod, JHMCS helmet sight', ew: 'AN/ALQ-213 countermeasures, AN/ALR-56M radar warning', cost: 'US$18.8 million (1998); F-16 Block 70 about $64 million', operators: '25 air forces including the US, Israel, Turkey, Egypt, Greece, Poland, Pakistan, Taiwan, Ukraine', combat: 'Osirak raid (1981), Gulf War, Balkans, Afghanistan, Iraq, Syria, Ukraine', variants: 'F-16A/B, C/D, E/F Block 60, Block 70/72 (F-16V)' },
-  f22: { radar: 'AN/APG-77 AESA with low probability of intercept', sensors: 'AN/AAR-56 missile launch detectors', ew: 'AN/ALR-94 passive receiver, which can locate emitters beyond radar range', cost: 'About US$150 million (2009)', operators: 'US Air Force only; export is banned by law', combat: 'First combat strike over Syria in 2014; shot down a Chinese surveillance balloon with an AIM-9X in 2023', variants: 'F-22A (a two-seat F-22B was cancelled)' },
-  f35a: { radar: 'AN/APG-81 AESA (AN/APG-85 from Lot 17)', sensors: 'AN/AAQ-40 EOTS targeting sensor, AN/AAQ-37 DAS: six infrared cameras that let the pilot see through the airframe', ew: 'AN/ASQ-239 electronic warfare suite', cost: 'About US$82.5 million (Lots 15-17)', operators: 'US, UK, Italy, Netherlands, Norway, Denmark, Australia, Israel, Japan, South Korea, Belgium, Poland, Finland, Switzerland, Singapore, Czechia, Germany, Canada, Greece, Romania', combat: 'First combat use by Israel in 2018; strikes on Iran in 2024-25', variants: 'F-35A (runways), F-35B (short take-off, vertical landing), F-35C (carriers)' },
-  f15e: { radar: 'AN/APG-82(V)1 AESA', sensors: 'Sniper targeting pod, LANTIRN navigation pod', ew: 'AN/ALQ-250 EPAWSS (replacing AN/ALQ-135)', cost: 'US$31.1 million (1998)', operators: 'US; derivatives in Israel (F-15I), Saudi Arabia (F-15SA), South Korea (F-15K), Singapore (F-15SG), Qatar (F-15QA)', combat: 'Gulf War Scud hunting, Balkans, Afghanistan, Iraq, Libya, Syria; shot down Iranian drones in 2024', variants: 'F-15E, export F-15I/K/SG/SA/QA; the F-15EX Eagle II is the newest development' },
-  fa18e: { radar: 'AN/APG-79 AESA', sensors: 'ATFLIR targeting pod, IRST21 infrared search and track (Block III)', ew: 'AN/ALQ-214 jammer, AN/ALR-67 radar warning', cost: 'About US$67 million (2021)', operators: 'US Navy, Royal Australian Air Force, Kuwait', combat: 'Iraq from 2002, Syria (shot down a Su-22 in 2017), Red Sea operations against the Houthis 2023-25', variants: 'F/A-18E single seat, F two seat, EA-18G Growler electronic attack' },
-  f14d: { radar: 'AN/APG-71, a digital development of the AWG-9 that could track 24 targets', sensors: 'AN/AAS-42 infrared search and track, TCS television camera', ew: 'AN/ALQ-165 jammer', cost: 'About US$38 million (1998)', operators: 'US Navy 1974-2006; Iran still flies the F-14A', combat: 'Gulf of Sidra (1981, 1989), Iran-Iraq War, Bosnia, Afghanistan, Iraq', variants: 'F-14A, F-14B, F-14D' },
-  f4e: { radar: 'AN/APQ-120', sensors: 'Pave Spike laser designator pod (later Pave Tack)', ew: 'AN/ALQ-119 or AN/ALQ-131 jamming pods', cost: 'About US$2.4 million (1965)', operators: 'US, Israel, Germany, Japan, Turkey, Greece, South Korea, Iran, Egypt and others', combat: 'Vietnam, Arab-Israeli wars, Iran-Iraq War, Gulf War (F-4G Wild Weasel)', variants: 'F-4B/J/S (Navy), C/D/E (Air Force), F-4F, F-4EJ, RF-4 reconnaissance, F-4G Wild Weasel' },
-  su35: { radar: 'N035 Irbis-E passive electronically scanned array, about 350 km against large targets', sensors: 'OLS-35 infrared search and track', ew: 'L175M Khibiny-M electronic warfare suite', cost: 'About US$85 million (est.)', operators: 'Russia, China', combat: 'Syria, Ukraine', variants: 'Su-35S (Russia), Su-35SK (China); the earlier Su-35 name was used for the Su-27M' },
-  su57: { radar: 'N036 Byelka AESA with nose and cheek arrays, plus L-band arrays in the wing leading edges', sensors: '101KS Atoll infrared search, missile warning and laser countermeasures', ew: 'Himalayas electronic warfare suite', cost: 'About US$35-50 million (est.)', operators: 'Russia', combat: 'Trials in Syria (2018), stand-off strikes over Ukraine', variants: 'Su-57, export Su-57E, Su-57M with the new AL-51F1 engine' },
-  mig29: { radar: 'N019 Sapfir-29 pulse-Doppler', sensors: 'OEPrNK-29 infrared search and laser rangefinder, Shchel-3UM helmet sight', ew: 'SPO-15 radar warning', cost: 'About US$11 million (1990s, est.)', operators: 'About 30 air forces including Russia, India, Poland, Ukraine, Serbia, Iran, Algeria, North Korea', combat: 'Gulf War, Kosovo, Eritrea-Ethiopia, Ukraine', variants: '9.12, 9.13, MiG-29S, SMT, MiG-29K/KUB (naval), MiG-35' },
-  mig31: { radar: 'Zaslon-M passive phased array, the first electronically scanned radar on a fighter (Zaslon, 1981)', sensors: '8TK infrared search and track', ew: 'Datalink to share targets across a flight of four', cost: 'Not published', operators: 'Russia, Kazakhstan', combat: 'Ukraine: very long range R-37M shots and Kinzhal launches', variants: 'MiG-31, 31B, 31BM, 31K (Kinzhal), 31I (anti-satellite)' },
-  mig21: { radar: 'RP-22 Sapfir-21', sensors: 'ASP-PF gyro gunsight', ew: 'SPO-10 radar warning', cost: 'Very low; the design goal was mass production', operators: 'About 60 countries over its life; a handful today', combat: 'Vietnam, Arab-Israeli wars, Indo-Pakistani wars (including 2019), Angola, Balkans', variants: 'MiG-21F-13, PF, MF, bis, two-seat UM; copied in China as the J-7 / F-7' },
-  typhoon: { radar: 'CAPTOR-M, being replaced by CAPTOR-E AESA (ECRS Mk2 in RAF jets)', sensors: 'PIRATE infrared search and track, Striker II helmet', ew: 'Praetorian defensive aids suite with towed decoys', cost: 'About €90 million (est.)', operators: 'UK, Germany, Italy, Spain, Austria, Saudi Arabia, Oman, Kuwait, Qatar; ordered by Turkey', combat: 'Libya (2011), Iraq and Syria, strikes on the Houthis', variants: 'Tranche 1 to 4; Typhoon EK electronic attack planned for Germany' },
-  rafale: { radar: 'RBE2-AA AESA', sensors: 'OSF front-sector optronics, TALIOS targeting pod', ew: 'SPECTRA integrated self-protection suite', cost: 'About €80 million', operators: 'France, Egypt, Qatar, India, Greece, Croatia, Indonesia; ordered by the UAE and Serbia', combat: 'Afghanistan, Libya, Mali, Iraq and Syria, India (2025)', variants: 'Rafale C single seat, B two seat, M naval; F4 and F5 standards' },
-  gripen: { radar: 'PS-05/A (Gripen E: Raven ES-05 AESA)', sensors: 'LITENING pod; Gripen E adds Skyward-G IRST', ew: 'EWS 39 integrated suite', cost: 'About US$30-60 million depending on package', operators: 'Sweden, Czechia, Hungary, South Africa, Thailand, Brazil (E); ordered by Colombia', combat: 'Reconnaissance over Libya (2011)', variants: 'JAS 39A/B, C/D, E/F' },
-  j20: { radar: 'Type 1475 (KLJ-5) AESA (est.)', sensors: 'Chin-mounted electro-optical targeting system, distributed aperture sensors', ew: 'Not published', cost: 'About US$110 million (est.)', operators: 'People\'s Liberation Army Air Force', combat: 'None', variants: 'J-20, J-20A, J-20S two-seat' },
-  m2000: { radar: 'RDI pulse-Doppler (Mirage 2000-5: RDY)', sensors: 'Helmet sight on later versions', ew: 'ICMS integrated countermeasures', cost: 'About US$23 million (est.)', operators: 'France, India, Greece, UAE, Egypt, Taiwan, Qatar, Peru; retired by Brazil', combat: 'Gulf War, Bosnia, Kargil (1999), Afghanistan, Balakot (2019)', variants: '2000C, B, N (nuclear), D (strike), -5, -9' },
-  tornado: { radar: 'Texas Instruments ground-mapping radar and terrain-following radar', sensors: 'LITENING pod, RAPTOR reconnaissance pod (GR4)', ew: 'Sky Shadow or Cerberus jamming pods, BOZ chaff dispensers', cost: 'Not published', operators: 'Germany, Italy, Saudi Arabia; UK retired it in 2019', combat: 'Gulf War runway attacks, Kosovo, Afghanistan, Iraq, Libya, Syria', variants: 'IDS strike, ECR electronic combat, ADV (F3) interceptor, GR4' },
-  a10: { radar: 'None', sensors: 'Sniper or LITENING pod, Scorpion helmet cueing', ew: 'AN/ALQ-131 or AN/ALQ-184 pod, AN/AAR-47 missile warning', cost: 'US$18.8 million (1994)', operators: 'US Air Force', combat: 'Gulf War, Balkans, Afghanistan, Iraq, Syria', variants: 'A-10A, OA-10A forward air control, A-10C' },
+  f16: { canopyH: 0.49, radar: 'AN/APG-68(V)9 pulse-Doppler; upgraded jets carry the AN/APG-83 SABR AESA', sensors: 'Sniper or LITENING targeting pod, JHMCS helmet sight', ew: 'AN/ALQ-213 countermeasures, AN/ALR-56M radar warning', cost: 'US$18.8 million (1998); F-16 Block 70 about $64 million', operators: '25 air forces including the US, Israel, Turkey, Egypt, Greece, Poland, Pakistan, Taiwan, Ukraine', combat: 'Osirak raid (1981), Gulf War, Balkans, Afghanistan, Iraq, Syria, Ukraine', variants: 'F-16A/B, C/D, E/F Block 60, Block 70/72 (F-16V)' },
+  f22: { canopyH: 0.42, radar: 'AN/APG-77 AESA with low probability of intercept', sensors: 'AN/AAR-56 missile launch detectors', ew: 'AN/ALR-94 passive receiver, which can locate emitters beyond radar range', cost: 'About US$150 million (2009)', operators: 'US Air Force only; export is banned by law', combat: 'First combat strike over Syria in 2014; shot down a Chinese surveillance balloon with an AIM-9X in 2023', variants: 'F-22A (a two-seat F-22B was cancelled)' },
+  f35a: { canopyH: 0.39, radar: 'AN/APG-81 AESA (AN/APG-85 from Lot 17)', sensors: 'AN/AAQ-40 EOTS targeting sensor, AN/AAQ-37 DAS: six infrared cameras that let the pilot see through the airframe', ew: 'AN/ASQ-239 electronic warfare suite', cost: 'About US$82.5 million (Lots 15-17)', operators: 'US, UK, Italy, Netherlands, Norway, Denmark, Australia, Israel, Japan, South Korea, Belgium, Poland, Finland, Switzerland, Singapore, Czechia, Germany, Canada, Greece, Romania', combat: 'First combat use by Israel in 2018; strikes on Iran in 2024-25', variants: 'F-35A (runways), F-35B (short take-off, vertical landing), F-35C (carriers)' },
+  f15e: { canopyH: 0.45, radar: 'AN/APG-82(V)1 AESA', sensors: 'Sniper targeting pod, LANTIRN navigation pod', ew: 'AN/ALQ-250 EPAWSS (replacing AN/ALQ-135)', cost: 'US$31.1 million (1998)', operators: 'US; derivatives in Israel (F-15I), Saudi Arabia (F-15SA), South Korea (F-15K), Singapore (F-15SG), Qatar (F-15QA)', combat: 'Gulf War Scud hunting, Balkans, Afghanistan, Iraq, Libya, Syria; shot down Iranian drones in 2024', variants: 'F-15E, export F-15I/K/SG/SA/QA; the F-15EX Eagle II is the newest development' },
+  fa18e: { canopyH: 0.39, radar: 'AN/APG-79 AESA', sensors: 'ATFLIR targeting pod, IRST21 infrared search and track (Block III)', ew: 'AN/ALQ-214 jammer, AN/ALR-67 radar warning', cost: 'About US$67 million (2021)', operators: 'US Navy, Royal Australian Air Force, Kuwait', combat: 'Iraq from 2002, Syria (shot down a Su-22 in 2017), Red Sea operations against the Houthis 2023-25', variants: 'F/A-18E single seat, F two seat, EA-18G Growler electronic attack' },
+  f14d: { canopyH: 0.41, radar: 'AN/APG-71, a digital development of the AWG-9 that could track 24 targets', sensors: 'AN/AAS-42 infrared search and track, TCS television camera', ew: 'AN/ALQ-165 jammer', cost: 'About US$38 million (1998)', operators: 'US Navy 1974-2006; Iran still flies the F-14A', combat: 'Gulf of Sidra (1981, 1989), Iran-Iraq War, Bosnia, Afghanistan, Iraq', variants: 'F-14A, F-14B, F-14D' },
+  f4e: { canopyH: 0.35, radar: 'AN/APQ-120', sensors: 'Pave Spike laser designator pod (later Pave Tack)', ew: 'AN/ALQ-119 or AN/ALQ-131 jamming pods', cost: 'About US$2.4 million (1965)', operators: 'US, Israel, Germany, Japan, Turkey, Greece, South Korea, Iran, Egypt and others', combat: 'Vietnam, Arab-Israeli wars, Iran-Iraq War, Gulf War (F-4G Wild Weasel)', variants: 'F-4B/J/S (Navy), C/D/E (Air Force), F-4F, F-4EJ, RF-4 reconnaissance, F-4G Wild Weasel' },
+  su35: { canopyH: 0.41, radar: 'N035 Irbis-E passive electronically scanned array, about 350 km against large targets', sensors: 'OLS-35 infrared search and track', ew: 'L175M Khibiny-M electronic warfare suite', cost: 'About US$85 million (est.)', operators: 'Russia, China', combat: 'Syria, Ukraine', variants: 'Su-35S (Russia), Su-35SK (China); the earlier Su-35 name was used for the Su-27M' },
+  su57: { canopyH: 0.35, radar: 'N036 Byelka AESA with nose and cheek arrays, plus L-band arrays in the wing leading edges', sensors: '101KS Atoll infrared search, missile warning and laser countermeasures', ew: 'Himalayas electronic warfare suite', cost: 'About US$35-50 million (est.)', operators: 'Russia', combat: 'Trials in Syria (2018), stand-off strikes over Ukraine', variants: 'Su-57, export Su-57E, Su-57M with the new AL-51F1 engine' },
+  mig29: { canopyH: 0.38, radar: 'N019 Sapfir-29 pulse-Doppler', sensors: 'OEPrNK-29 infrared search and laser rangefinder, Shchel-3UM helmet sight', ew: 'SPO-15 radar warning', cost: 'About US$11 million (1990s, est.)', operators: 'About 30 air forces including Russia, India, Poland, Ukraine, Serbia, Iran, Algeria, North Korea', combat: 'Gulf War, Kosovo, Eritrea-Ethiopia, Ukraine', variants: '9.12, 9.13, MiG-29S, SMT, MiG-29K/KUB (naval), MiG-35' },
+  mig31: { canopyH: 0.34, radar: 'Zaslon-M passive phased array, the first electronically scanned radar on a fighter (Zaslon, 1981)', sensors: '8TK infrared search and track', ew: 'Datalink to share targets across a flight of four', cost: 'Not published', operators: 'Russia, Kazakhstan', combat: 'Ukraine: very long range R-37M shots and Kinzhal launches', variants: 'MiG-31, 31B, 31BM, 31K (Kinzhal), 31I (anti-satellite)' },
+  mig21: { canopyH: 0.29, radar: 'RP-22 Sapfir-21', sensors: 'ASP-PF gyro gunsight', ew: 'SPO-10 radar warning', cost: 'Very low; the design goal was mass production', operators: 'About 60 countries over its life; a handful today', combat: 'Vietnam, Arab-Israeli wars, Indo-Pakistani wars (including 2019), Angola, Balkans', variants: 'MiG-21F-13, PF, MF, bis, two-seat UM; copied in China as the J-7 / F-7' },
+  typhoon: { canopyH: 0.37, radar: 'CAPTOR-M, being replaced by CAPTOR-E AESA (ECRS Mk2 in RAF jets)', sensors: 'PIRATE infrared search and track, Striker II helmet', ew: 'Praetorian defensive aids suite with towed decoys', cost: 'About €90 million (est.)', operators: 'UK, Germany, Italy, Spain, Austria, Saudi Arabia, Oman, Kuwait, Qatar; ordered by Turkey', combat: 'Libya (2011), Iraq and Syria, strikes on the Houthis', variants: 'Tranche 1 to 4; Typhoon EK electronic attack planned for Germany' },
+  rafale: { canopyH: 0.37, radar: 'RBE2-AA AESA', sensors: 'OSF front-sector optronics, TALIOS targeting pod', ew: 'SPECTRA integrated self-protection suite', cost: 'About €80 million', operators: 'France, Egypt, Qatar, India, Greece, Croatia, Indonesia; ordered by the UAE and Serbia', combat: 'Afghanistan, Libya, Mali, Iraq and Syria, India (2025)', variants: 'Rafale C single seat, B two seat, M naval; F4 and F5 standards' },
+  gripen: { canopyH: 0.34, radar: 'PS-05/A (Gripen E: Raven ES-05 AESA)', sensors: 'LITENING pod; Gripen E adds Skyward-G IRST', ew: 'EWS 39 integrated suite', cost: 'About US$30-60 million depending on package', operators: 'Sweden, Czechia, Hungary, South Africa, Thailand, Brazil (E); ordered by Colombia', combat: 'Reconnaissance over Libya (2011)', variants: 'JAS 39A/B, C/D, E/F' },
+  j20: { canopyH: 0.37, radar: 'Type 1475 (KLJ-5) AESA (est.)', sensors: 'Chin-mounted electro-optical targeting system, distributed aperture sensors', ew: 'Not published', cost: 'About US$110 million (est.)', operators: 'People\'s Liberation Army Air Force', combat: 'None', variants: 'J-20, J-20A, J-20S two-seat' },
+  m2000: { canopyH: 0.37, radar: 'RDI pulse-Doppler (Mirage 2000-5: RDY)', sensors: 'Helmet sight on later versions', ew: 'ICMS integrated countermeasures', cost: 'About US$23 million (est.)', operators: 'France, India, Greece, UAE, Egypt, Taiwan, Qatar, Peru; retired by Brazil', combat: 'Gulf War, Bosnia, Kargil (1999), Afghanistan, Balakot (2019)', variants: '2000C, B, N (nuclear), D (strike), -5, -9' },
+  tornado: { canopyH: 0.35, radar: 'Texas Instruments ground-mapping radar and terrain-following radar', sensors: 'LITENING pod, RAPTOR reconnaissance pod (GR4)', ew: 'Sky Shadow or Cerberus jamming pods, BOZ chaff dispensers', cost: 'Not published', operators: 'Germany, Italy, Saudi Arabia; UK retired it in 2019', combat: 'Gulf War runway attacks, Kosovo, Afghanistan, Iraq, Libya, Syria', variants: 'IDS strike, ECR electronic combat, ADV (F3) interceptor, GR4' },
+  a10: { canopyH: 0.42, radar: 'None', sensors: 'Sniper or LITENING pod, Scorpion helmet cueing', ew: 'AN/ALQ-131 or AN/ALQ-184 pod, AN/AAR-47 missile warning', cost: 'US$18.8 million (1994)', operators: 'US Air Force', combat: 'Gulf War, Balkans, Afghanistan, Iraq, Syria', variants: 'A-10A, OA-10A forward air control, A-10C' },
   b52h: { radar: 'AN/APQ-166, being replaced by an AESA derived from the AN/APG-79', sensors: 'Electro-optical viewing system (infrared and TV), LITENING or Sniper pod', ew: 'AN/ALQ-172 jammer', cost: 'About US$84 million (2012 dollars)', operators: 'US Air Force', combat: 'Vietnam (Linebacker II), Gulf War, Kosovo, Afghanistan, Iraq, Syria', variants: 'B-52A to H; the B-52J adds Rolls-Royce F130 engines and a new radar' },
   b1b: { radar: 'AN/APQ-164 passive electronically scanned array with terrain following', sensors: 'Sniper targeting pod on the forward external station', ew: 'AN/ALQ-161 defensive system, towed decoys', cost: 'US$283 million (1998)', operators: 'US Air Force', combat: 'Operation Desert Fox (1998), Kosovo, Afghanistan, Iraq, Libya, Syria', variants: 'B-1A prototypes, B-1B' },
   b2a: { radar: 'AN/APQ-181, upgraded to an AESA', sensors: 'Low-observable antennas blended into the skin', ew: 'Defensive management system that plots routes around enemy radars', cost: 'US$737 million flyaway (1997), about US$2.1 billion including development', operators: 'US Air Force, 509th Bomb Wing', combat: 'Kosovo (1999), Afghanistan, Iraq, Libya, Yemen (2024), Iran (2025, 14 GBU-57s on Fordow and Natanz)', variants: 'B-2A only; the B-21 Raider is its successor' },

@@ -12,7 +12,7 @@ const state = {
   ac: null, loadIdx: 0, load: {}, custom: false,
   thr: 0, thrTarget: 0, bays: false,
   labels: store.get('labels', true), ground: store.get('ground', true), spin: true,
-  gear: store.get('gear', true), detail: store.get('detail', 2),
+  gear: store.get('gear', true), detail: 3,   // always maximum quality
   sweep: null, fuel: 1, tab: 'loadout', cat: 'All', q: '', sort: 'cat', cmp: store.get('cmp', []), hl: 0, hover: 0,
 };
 const cam = { yaw: 2.3, pitch: 0.32, zoom: 1, tyaw: 2.3, tpitch: 0.32, tzoom: 1, drag: false, idle: 0, ext: 0 };
@@ -67,8 +67,8 @@ function hasBayStores() { return (state.ac.stations || []).some(s => s.kind === 
 // ---- sizing
 function resize() {
   const r = $('#stage').getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
-  // columns across the viewer for Low / Medium / High / Ultra, scaled to the screen width
-  const base = [120, 170, 230, 330][state.detail], target = r.width < 600 ? base * 0.5 : r.width < 1100 ? base * 0.75 : base;
+  // maximum quality: about 340 columns on a desktop screen, scaled down on narrow screens
+  const base = 340, target = r.width < 600 ? base * 0.5 : r.width < 1100 ? base * 0.75 : base;
   const fs = clamp(Math.round(r.width / target / 0.6), 5, 20);
   ctx.font = `600 ${fs}px ${FONT}`;
   const cw = ctx.measureText('M').width || fs * 0.6, ch = cw * 2;
@@ -113,7 +113,7 @@ function frame(t) {
 
   const fr = freeRect(), cols = R.cols, rows = R.rows;
   const fov = 30, focCss = (geom.h / 2) / Math.tan(fov * D2R / 2);
-  const fit = Math.min(fr.w * 0.98, fr.h * 1.25) / 2;
+  const fit = Math.min(fr.w * 1.12, fr.h * 1.4) / 2;
   // keep a lit afterburner plume in frame: shift the target aft and widen the fit
   const mil = milPos(), abU = hasAB() ? clamp((state.thr - mil) / (1 - mil), 0, 1) : 0;
   const ext = scene.exhausts.length ? Math.max(...scene.exhausts.map(e => e.r)) * lerp(6, 16, abU) * (abU > 0 ? 1 : 0) : 0;
@@ -274,7 +274,6 @@ function initControls() {
   $('#labBtn').onclick = () => { state.labels = !state.labels; store.set('labels', state.labels); syncButtons(); };
   $('#grdBtn').onclick = () => { state.ground = !state.ground; store.set('ground', state.ground); syncButtons(); };
   $('#gearBtn').onclick = () => { state.gear = !state.gear; store.set('gear', state.gear); rebuild(); syncButtons(); audio.bay(state.gear); };
-  $('#detBtn').onclick = () => { state.detail = (state.detail + 1) % 4; store.set('detail', state.detail); resize(); rebuild(); syncButtons(); };
   $('#spinBtn').onclick = () => { state.spin = !state.spin; syncButtons(); };
   $$('[data-view]').forEach(b => b.onclick = () => setView(b.dataset.view));
   $('#sweep').addEventListener('input', e => {
@@ -306,7 +305,6 @@ function initControls() {
     else if (key === 'l') $('#labBtn').click();
     else if (key === 'g') $('#grdBtn').click();
     else if (key === 'u') $('#gearBtn').click();
-    else if (key === 'd') $('#detBtn').click();
     else if (key === 'c') addCompare();
     else if (key === 'o') sheet.open ? closeSheet() : openSheet();
     else if (key === 'm') $('#sndBtn').click();
@@ -341,7 +339,6 @@ function syncButtons() {
   $('#labBtn').classList.toggle('on', state.labels);
   $('#grdBtn').classList.toggle('on', state.ground);
   $('#gearBtn').classList.toggle('on', state.gear);
-  $('#detBtn').innerHTML = 'Detail: ' + ['Low', 'Medium', 'High', 'Ultra'][state.detail] + ' <kbd>D</kbd>';
   $('#spinBtn').classList.toggle('on', state.spin);
   $('#sndBtn').classList.toggle('on', audio.on);
   $('#sndBtn').innerHTML = (audio.on ? 'Sound on' : 'Sound off') + ' <kbd>M</kbd>';

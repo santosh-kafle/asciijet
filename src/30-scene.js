@@ -68,6 +68,7 @@ function buildScene(ac, o = {}) {
       M.part();
       if (p.t === 'loft') {
         let st = p.st;
+        if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
           const out = [st[0]];
           for (let i = 1; i < st.length; i++) {
@@ -298,6 +299,29 @@ function markings(M, ac, panels) {
 }
 
 // ---- landing gear: struts and wheels down to the floor
+
+// Canopy seated on the fuselage top line: keeps the authored length and width, raises the bubble
+// to the given height above the spine (windscreen steeper than the rear).
+function fuselageTop(ac, s) {
+  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
+  const st = f.st;
+  if (s <= st[0][0]) return (st[0][4] || 0) + st[0][2];
+  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
+    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
+    return lerp((st[i][4] || 0) + st[i][2], (st[i + 1][4] || 0) + st[i + 1][2], u);
+  }
+  return (st[st.length - 1][4] || 0) + st[st.length - 1][2];
+}
+function bubbleStations(ac, st, h) {
+  const s0 = st[0][0], s1 = st[st.length - 1][0], w = Math.max(...st.map(x => x[1])), out = [];
+  for (let i = 0; i <= 12; i++) {
+    const u = i / 12, pk = 0.32;
+    const prof = u < pk ? Math.sin(u / pk * Math.PI / 2) ** 0.7 : Math.cos((u - pk) / (1 - pk) * Math.PI / 2) ** 0.55;
+    const s = lerp(s0, s1, u), base = fuselageTop(ac, s) - 0.08;
+    out.push([s, Math.max(0.03, w * (0.35 + 0.65 * prof ** 0.6)), Math.max(0.02, h * prof), 0.08, base, 2.2]);
+  }
+  return out;
+}
 
 function fuselageBottom(ac, s) {
   const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
