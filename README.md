@@ -36,7 +36,9 @@ node build.mjs                 # writes dist/index.html, dist/artifact.html, dis
 node tools/check.cjs           # data check: stores, stations, engine counts, every scene builds
 node tools/ascii.cjs f16 150 20 1 0   # render an aircraft as text in the terminal (key yaw pitch throttle loadout)
 node tools/smoke.cjs           # browser test over every aircraft (needs Playwright)
-node tools/review.cjs f22,f35a # geometry review: top, side, front 3/4, rear 3/4 per aircraft -> tools/out/
+node tools/review.cjs f22,f35a # geometry review: top, side, front, bottom, front 3/4, rear 3/4 -> tools/out/
+node tools/fetch-refs.cjs       # download the reference three-views from Wikimedia Commons -> tools/ref/
+node tools/overlay.cjs f22     # model silhouette + metre grid over a published three-view -> tools/out/
 node tools/contact.cjs         # all aircraft on contact sheets (top | side | front); SIDE=1 for large profiles
 ```
 
@@ -69,3 +71,12 @@ Then `node build.mjs && node tools/check.cjs`.
 ## Accuracy
 
 Dimensions, weights, thrust and performance are public figures for the variant named. Values that only exist as open-source estimates (most of the J-20 and Su-57, some fuel loads) are marked **EST** in the page. Shapes are simplified from three-view dimensions, not surveyed models. Thrust and fuel flow are sea-level static; fuel flow uses typical specific fuel consumption for the engine type unless a figure is given.
+
+## Reference drawings
+
+Every airframe was fitted against a published three-view (Wikimedia Commons line drawings, public domain or CC)
+or, for the F-14, near-orthographic photos. The drawings are not in the repo: `tools/refs.json` names each
+Commons file and `node tools/fetch-refs.cjs` downloads them to `tools/ref/`. The calibration is also in refs.json: for each view, two pixel points (nose tip and tail for top and side, the wingtips for front).
+The overlay is scaled from the published length, so a part that runs past the real tail shows up in red or blue
+beyond the drawing. Where a published length includes a pitot or probe (MiG-29, Tornado), the geometry starts
+behind it and the boom is modelled.

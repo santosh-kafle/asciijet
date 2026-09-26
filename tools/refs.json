@@ -1,0 +1,809 @@
+{
+ "f16": {
+  "src": "File:General Dynamics F-16 Fighting Falcon 3-view line drawing.svg",
+  "w": 1920,
+  "img": "ref/f16.png",
+  "top": {
+   "a": [
+    1305,
+    625
+   ],
+   "b": [
+    45,
+    625
+   ]
+  },
+  "side": {
+   "a": [
+    610,
+    1105
+   ],
+   "b": [
+    1862,
+    1103
+   ]
+  },
+  "front": {
+   "a": [
+    1056,
+    297
+   ],
+   "b": [
+    1858,
+    297
+   ]
+  }
+ },
+ "f22": {
+  "src": "File:Lockheed Martin F-22A Raptor 3-view line drawing.jpg",
+  "w": 670,
+  "img": "ref/f22.png",
+  "top": {
+   "a": [
+    22,
+    760
+   ],
+   "b": [
+    665,
+    760
+   ]
+  },
+  "side": {
+   "a": [
+    18,
+    440
+   ],
+   "b": [
+    657,
+    440
+   ]
+  },
+  "front": {
+   "a": [
+    105,
+    178
+   ],
+   "b": [
+    557,
+    178
+   ]
+  }
+ },
+ "f35a": {
+  "src": "File:Lockheed Martin F-35A Lightning II 3-view drawing.png",
+  "w": 1115,
+  "img": "ref/f35a.png",
+  "top": {
+   "a": [
+    825,
+    15
+   ],
+   "b": [
+    825,
+    718
+   ]
+  },
+  "side": {
+   "a": [
+    10,
+    308
+   ],
+   "b": [
+    712,
+    308
+   ]
+  },
+  "front": {
+   "a": [
+    20,
+    122
+   ],
+   "b": [
+    503,
+    122
+   ]
+  }
+ },
+ "f15e": {
+  "src": "File:McDonnell Douglas F-15 Eagle 3-view.svg",
+  "w": 1920,
+  "img": "ref/f15e.png",
+  "top": {
+   "a": [
+    377,
+    15
+   ],
+   "b": [
+    377,
+    1082
+   ]
+  },
+  "side": {
+   "a": [
+    866,
+    1000
+   ],
+   "b": [
+    1910,
+    1000
+   ]
+  },
+  "front": {
+   "a": [
+    987,
+    432
+   ],
+   "b": [
+    1690,
+    432
+   ]
+  }
+ },
+ "f4e": {
+  "src": "File:McDonnell Douglas F-4E Phantom II 3-view line drawing (manual).png",
+  "w": 1920,
+  "img": "ref/f4e.png",
+  "top": {
+   "a": [
+    125,
+    1703
+   ],
+   "b": [
+    1833,
+    1700
+   ]
+  },
+  "side": {
+   "a": [
+    120,
+    308
+   ],
+   "b": [
+    1842,
+    308
+   ]
+  },
+  "front": {
+   "a": [
+    500,
+    908
+   ],
+   "b": [
+    1583,
+    908
+   ]
+  }
+ },
+ "fa18e": {
+  "src": "File:McDonnell Douglas F-A-18 Hornet 3-view line drawing.png",
+  "w": 574,
+  "img": "ref/fa18e.png",
+  "note": "legacy F/A-18 drawing, proportions only",
+  "top": {
+   "a": [
+    131,
+    14
+   ],
+   "b": [
+    131,
+    340
+   ]
+  },
+  "side": {
+   "a": [
+    225,
+    305
+   ],
+   "b": [
+    556,
+    305
+   ]
+  },
+  "front": {
+   "a": [
+    270,
+    139
+   ],
+   "b": [
+    488,
+    139
+   ]
+  }
+ },
+ "su35": {
+  "src": "File:Sukhoi Su-27 3-view line drawing.svg",
+  "w": 1920,
+  "img": "ref/su35.png",
+  "note": "Su-27 drawing (plan from below); Su-35 has no canards",
+  "top": {
+   "a": [
+    360,
+    4
+   ],
+   "b": [
+    360,
+    1064
+   ]
+  },
+  "side": {
+   "a": [
+    836,
+    936
+   ],
+   "b": [
+    1919,
+    936
+   ]
+  },
+  "front": {
+   "a": [
+    903,
+    366
+   ],
+   "b": [
+    1637,
+    366
+   ]
+  }
+ },
+ "su57": {
+  "src": "File:Sukhoi T-50 3-view.svg",
+  "w": 1920,
+  "img": "ref/su57.png",
+  "top": {
+   "a": [
+    1089,
+    406
+   ],
+   "b": [
+    29,
+    406
+   ]
+  },
+  "side": {
+   "a": [
+    1089,
+    921
+   ],
+   "b": [
+    29,
+    921
+   ]
+  },
+  "front": {
+   "a": [
+    1136,
+    914
+   ],
+   "b": [
+    1893,
+    914
+   ]
+  }
+ },
+ "mig29": {
+  "src": "File:Mikoyan MiG-29 3-view.svg",
+  "w": 1920,
+  "img": "ref/mig29.png",
+  "note": "length includes the pitot boom",
+  "top": {
+   "a": [
+    23,
+    885
+   ],
+   "b": [
+    1515,
+    885
+   ]
+  },
+  "side": {
+   "a": [
+    28,
+    278
+   ],
+   "b": [
+    1515,
+    278
+   ]
+  }
+ },
+ "mig31": {
+  "src": "File:Mikoyan MiG-31 3-view line drawing.png",
+  "w": 574,
+  "img": "ref/mig31.png",
+  "top": {
+   "a": [
+    121,
+    50
+   ],
+   "b": [
+    121,
+    347
+   ]
+  },
+  "side": {
+   "a": [
+    239,
+    320
+   ],
+   "b": [
+    542,
+    320
+   ]
+  },
+  "front": {
+   "a": [
+    284,
+    119
+   ],
+   "b": [
+    484,
+    119
+   ]
+  }
+ },
+ "mig21": {
+  "src": "File:Mikoyan-Gurevich MiG-21 3-view line drawing.png",
+  "w": 574,
+  "img": "ref/mig21.png",
+  "top": {
+   "a": [
+    96.5,
+    30
+   ],
+   "b": [
+    96.5,
+    340
+   ]
+  },
+  "side": {
+   "a": [
+    222,
+    297
+   ],
+   "b": [
+    555,
+    297
+   ]
+  },
+  "front": {
+   "a": [
+    259,
+    134
+   ],
+   "b": [
+    424,
+    134
+   ]
+  }
+ },
+ "typhoon": {
+  "src": "File:Eurofighter Typhoon line drawing.svg",
+  "w": 1920,
+  "img": "ref/typhoon.png",
+  "note": "length runs to the tail cone between the nozzles",
+  "top": {
+   "a": [
+    880,
+    767
+   ],
+   "b": [
+    1892,
+    767
+   ]
+  },
+  "side": {
+   "a": [
+    870,
+    267
+   ],
+   "b": [
+    1879,
+    267
+   ]
+  },
+  "front": {
+   "a": [
+    245,
+    962
+   ],
+   "b": [
+    938,
+    962
+   ]
+  }
+ },
+ "rafale": {
+  "src": "File:Dassault Rafale 3-view line drawing.svg",
+  "w": 1920,
+  "img": "ref/rafale.png",
+  "note": "two-seat Rafale B drawing; same planform",
+  "top": {
+   "a": [
+    25,
+    1012
+   ],
+   "b": [
+    1388,
+    1012
+   ]
+  },
+  "side": {
+   "a": [
+    25,
+    345
+   ],
+   "b": [
+    1388,
+    345
+   ]
+  }
+ },
+ "gripen": {
+  "src": "File:Saab JAS 39 Gripen 3-view.svg",
+  "w": 1920,
+  "img": "ref/gripen.png",
+  "top": {
+   "a": [
+    1825,
+    883
+   ],
+   "b": [
+    487,
+    883
+   ]
+  },
+  "side": {
+   "a": [
+    1822,
+    313
+   ],
+   "b": [
+    487,
+    313
+   ]
+  }
+ },
+ "j20": {
+  "src": "File:Chengdu J-20.svg",
+  "w": 1920,
+  "img": "ref/j20.png",
+  "top": {
+   "a": [
+    1780,
+    845
+   ],
+   "b": [
+    380,
+    845
+   ]
+  },
+  "side": {
+   "a": [
+    1780,
+    197
+   ],
+   "b": [
+    380,
+    197
+   ]
+  }
+ },
+ "m2000": {
+  "src": "File:Dassault Mirage 2000C 3-view line drawing.gif",
+  "w": 1000,
+  "img": "ref/m2000.png",
+  "top": {
+   "a": [
+    638,
+    390
+   ],
+   "b": [
+    35,
+    390
+   ]
+  },
+  "side": {
+   "a": [
+    360,
+    585
+   ],
+   "b": [
+    962,
+    585
+   ]
+  },
+  "front": {
+   "a": [
+    480,
+    236
+   ],
+   "b": [
+    868,
+    236
+   ]
+  }
+ },
+ "tornado": {
+  "src": "File:Panavia Tornado IDS 3-view line drawing.svg",
+  "w": 1920,
+  "img": "ref/tornado.png",
+  "note": "scale from the 13.91 m span; length measured from the pitot tip",
+  "top": {
+   "a": [
+    437,
+    3
+   ],
+   "b": [
+    437,
+    1045
+   ]
+  },
+  "side": {
+   "a": [
+    865,
+    928
+   ],
+   "b": [
+    1907,
+    928
+   ]
+  },
+  "front": {
+   "a": [
+    945,
+    327
+   ],
+   "b": [
+    1835,
+    327
+   ]
+  }
+ },
+ "a10": {
+  "src": "File:Fairchild Republic A-10 Thunderbolt II 3-view.svg",
+  "w": 1920,
+  "img": "ref/a10.png",
+  "note": "length from the gun muzzle to the tail cone",
+  "top": {
+   "a": [
+    1882,
+    1233
+   ],
+   "b": [
+    487,
+    1233
+   ]
+  },
+  "side": {
+   "a": [
+    1878,
+    282
+   ],
+   "b": [
+    483,
+    282
+   ]
+  },
+  "front": {
+   "a": [
+    47,
+    1000
+   ],
+   "b": [
+    398,
+    1000
+   ]
+  }
+ },
+ "b52h": {
+  "src": "File:Boeing B-52H Stratofortress 3-view line drawing.png",
+  "w": 1920,
+  "img": "ref/b52h.png",
+  "top": {
+   "a": [
+    1862,
+    1173
+   ],
+   "b": [
+    540,
+    1173
+   ]
+  },
+  "side": {
+   "a": [
+    1862,
+    284
+   ],
+   "b": [
+    540,
+    284
+   ]
+  }
+ },
+ "b1b": {
+  "src": "File:Rockwell B-1B Lancer 3-view line drawing.png",
+  "w": 574,
+  "img": "ref/b1b.png",
+  "top": {
+   "a": [
+    126,
+    62
+   ],
+   "b": [
+    126,
+    286
+   ]
+  },
+  "side": {
+   "a": [
+    295,
+    294
+   ],
+   "b": [
+    525,
+    294
+   ]
+  },
+  "front": {
+   "a": [
+    309,
+    90
+   ],
+   "b": [
+    512,
+    90
+   ]
+  }
+ },
+ "b2a": {
+  "src": "File:Northrop B-2 3-view line drawing.png",
+  "w": 887,
+  "img": "ref/b2a.png",
+  "note": "top view drawn nose-down; scale from the 52.4 m span",
+  "top": {
+   "a": [
+    578,
+    285
+   ],
+   "b": [
+    578,
+    74
+   ]
+  },
+  "side": {
+   "a": [
+    42,
+    247
+   ],
+   "b": [
+    335,
+    247
+   ]
+  },
+  "front": {
+   "a": [
+    300,
+    345
+   ],
+   "b": [
+    858,
+    345
+   ]
+  }
+ },
+ "tu160": {
+  "src": "File:Tupolev Tu-160 3-view graphic.svg",
+  "w": 1920,
+  "img": "ref/tu160.png",
+  "note": "plan shows one wing at 20 deg (lower) and one at 65 deg",
+  "top": {
+   "a": [
+    20,
+    655
+   ],
+   "b": [
+    1892,
+    655
+   ]
+  },
+  "side": {
+   "a": [
+    20,
+    1955
+   ],
+   "b": [
+    1905,
+    1955
+   ]
+  }
+ },
+ "tu22m3": {
+  "src": "File:Tupolev Tu-22M3 four-view silhouette.png",
+  "w": 659,
+  "img": "ref/tu22m3.png",
+  "note": "silhouette; plan at minimum sweep",
+  "top": {
+   "a": [
+    152,
+    10
+   ],
+   "b": [
+    152,
+    331
+   ]
+  },
+  "side": {
+   "a": [
+    548,
+    85
+   ],
+   "b": [
+    240,
+    85
+   ]
+  },
+  "front": {
+   "a": [
+    386,
+    243
+   ],
+   "b": [
+    636,
+    243
+   ]
+  }
+ },
+ "tu95": {
+  "src": "File:Tupolev Tu-95MS 3-view.svg",
+  "w": 1920,
+  "img": "ref/tu95.png",
+  "note": "length from the radome, excluding the refuelling probe",
+  "top": {
+   "a": [
+    1805,
+    1083
+   ],
+   "b": [
+    498,
+    1083
+   ]
+  },
+  "side": {
+   "a": [
+    1812,
+    305
+   ],
+   "b": [
+    500,
+    305
+   ]
+  }
+ },
+ "vulcan": {
+  "src": "File:Avro Vulcan B.2 3-view line drawing.svg",
+  "w": 1920,
+  "img": "ref/vulcan.png",
+  "note": "length excludes the refuelling probe",
+  "top": {
+   "a": [
+    88,
+    1167
+   ],
+   "b": [
+    1497,
+    1167
+   ]
+  },
+  "side": {
+   "a": [
+    88,
+    293
+   ],
+   "b": [
+    1497,
+    293
+   ]
+  }
+ }
+}
