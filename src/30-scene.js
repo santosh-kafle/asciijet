@@ -69,6 +69,15 @@ function buildScene(ac, o = {}) {
       if (p.t === 'loft') {
         let st = p.st;
         if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
+        if (p.box) {   // sharp-edged rectangular intake duct with the same stations and rake
+          const sg = Math.sign(p.z || 1) * zs, rk = p.rake || {};
+          const pst = st.map(([ss, hw, top, bot, yc = 0], i) => {
+            const c = [[-hw, top], [0, top], [hw, top], [hw, 0], [hw, -bot], [0, -bot], [-hw, -bot], [-hw, 0]];
+            return { s: ss, yc, pts: c.map(([z, y]) => [z, y, i ? 0 : (rk.bot || 0) * (top - y) / ((top + bot) || 1) + (rk.out || 0) * Math.max(0, z * sg / (hw || 1))]) };
+          });
+          ploft(M, pst, { x0: L / 2, z: (p.z || 0) * zs, mat: p.mat, capF: p.capF, capB: p.capB });
+          continue;
+        }
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
           const out = [st[0]];
           for (let i = 1; i < st.length; i++) {
@@ -77,7 +86,21 @@ function buildScene(ac, o = {}) {
           }
           st = out;
         }
-        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
+        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, rake: p.rake, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
+      } else if (p.t === 'ploft') {
+        let st = p.st.map(([s, pts, yc = 0]) => ({ s, pts, yc }));
+        if (p.fine) {   // resample so bay cut-outs follow the bay outline
+          const out = [st[0]];
+          for (let i = 1; i < st.length; i++) {
+            const a = st[i - 1], b = st[i], k = Math.max(1, Math.ceil((b.s - a.s) / p.fine));
+            for (let j = 1; j <= k; j++) {
+              const u = j / k;
+              out.push({ s: lerp(a.s, b.s, u), yc: lerp(a.yc, b.yc, u), pts: a.pts.map((q, m) => q.map((v, c) => lerp(v || 0, b.pts[m][c] || 0, u))) });
+            }
+          }
+          st = out;
+        }
+        ploft(M, st, { x0: L / 2, z: (p.z || 0) * zs, zs, mat: p.mat, capF: p.capF, capB: p.capB, flat: p.flat, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
         let secs = panelSections(p, L, sweep);
         if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
@@ -247,14 +270,14 @@ function insigniaFor(ac) {
 }
 
 // Flat layered disc or five-point star lying on a surface (centre c, unit normal n).
-function decal(M, c, n, r, layers) {
+function decal(M, c, n, r, layers, lift = 0) {
   let a = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
   const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const nm = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
   const e1 = nm(cr(n, a)), e2 = nm(cr(n, e1));
   M.part();
   layers.forEach(([shape, f, mat], li) => {
-    const off = 0.015 * (li + 1), rr = r * f, pts = [];
+    const off = lift + 0.015 * (li + 1), rr = r * f, pts = [];
     const N = shape === 'star' ? 10 : 18;
     for (let k = 0; k < N; k++) {
       const ang = (k / N) * Math.PI * 2 + Math.PI / 2, rad = shape === 'star' ? (k % 2 ? rr * 0.4 : rr) : rr;
@@ -281,7 +304,9 @@ function markings(M, ac, panels) {
       let n = [chord[1] * span[2] - chord[2] * span[1], chord[2] * span[0] - chord[0] * span[2], chord[0] * span[1] - chord[1] * span[0]];
       const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
       if (Math.sign(n[1]) !== side) n = n.map(x => -x);
-      decal(M, [pt[0], pt[1], pt[2]], n, clamp(pt[3] * 0.3, 0.35, 2.4), ins.wing);
+      const r = clamp(pt[3] * 0.24, 0.35, 2.4), u = r / pt[3], t = lerp(A.t, B.t, f);
+      const lift = (afT(0.45) - Math.min(afT(Math.max(0.01, 0.45 - u)), afT(Math.min(0.99, 0.45 + u)))) * t * pt[3] + 0.02;
+      decal(M, [pt[0], pt[1], pt[2]], n, r, ins.wing, lift);
     }
   }
   if (!ins.fin) return;
@@ -294,7 +319,9 @@ function markings(M, ac, panels) {
     const d = [dz, 0, 0], span = [0, dy, dz];
     let n = [0, -dz, dy]; const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
     const t = afT(0.45) * lerp(A.t, B.t, f) * ch;
-    for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), clamp(ch * 0.26, 0.3, 1.6), ins.wing);
+    const r = clamp(ch * 0.22, 0.3, 1.6), u = r / ch, tt = lerp(A.t, B.t, f);
+    const lift = (afT(0.45) - Math.min(afT(Math.max(0.01, 0.45 - u)), afT(Math.min(0.99, 0.45 + u)))) * tt * ch + 0.02;
+    for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), r, ins.wing, lift);
   }
 }
 
@@ -302,16 +329,24 @@ function markings(M, ac, panels) {
 
 // Canopy seated on the fuselage top line: keeps the authored length and width, raises the bubble
 // to the given height above the spine (windscreen steeper than the rear).
-function fuselageTop(ac, s) {
-  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
-  const st = f.st;
-  if (s <= st[0][0]) return (st[0][4] || 0) + st[0][2];
-  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
-    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
-    return lerp((st[i][4] || 0) + st[i][2], (st[i + 1][4] || 0) + st[i + 1][2], u);
-  }
-  return (st[st.length - 1][4] || 0) + st[st.length - 1][2];
+// Top and bottom of the main fuselage at s (round loft or faceted ploft).
+function mainBody(ac) {
+  return ac.geo.find(p => (p.t === 'loft' || p.t === 'ploft') && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
 }
+function bodyExtent(ac, s) {
+  const f = mainBody(ac);
+  const ext = f.t === 'ploft'
+    ? f.st.map(([ss, pts, yc = 0]) => [ss, yc + Math.max(...pts.map(q => q[1])), yc + Math.min(...pts.map(q => q[1]))])
+    : f.st.map(q => [q[0], (q[4] || 0) + q[2], (q[4] || 0) - q[3]]);
+  if (s <= ext[0][0]) return { top: ext[0][1], bot: ext[0][2] };
+  for (let i = 0; i + 1 < ext.length; i++) if (s >= ext[i][0] && s <= ext[i + 1][0]) {
+    const u = (s - ext[i][0]) / ((ext[i + 1][0] - ext[i][0]) || 1);
+    return { top: lerp(ext[i][1], ext[i + 1][1], u), bot: lerp(ext[i][2], ext[i + 1][2], u) };
+  }
+  const e = ext[ext.length - 1];
+  return { top: e[1], bot: e[2] };
+}
+const fuselageTop = (ac, s) => bodyExtent(ac, s).top;
 function bubbleStations(ac, st, h) {
   const s0 = st[0][0], s1 = st[st.length - 1][0], w = Math.max(...st.map(x => x[1])), out = [];
   for (let i = 0; i <= 12; i++) {
@@ -323,15 +358,7 @@ function bubbleStations(ac, st, h) {
   return out;
 }
 
-function fuselageBottom(ac, s) {
-  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
-  const st = f.st;
-  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
-    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
-    return lerp((st[i][4] || 0) - st[i][3], (st[i + 1][4] || 0) - st[i + 1][3], u);
-  }
-  return -0.5;
-}
+const fuselageBottom = (ac, s) => bodyExtent(ac, s).bot;
 
 function landingGear(M, ac, groundY) {
   const L = ac.dims.len, big = ac.cat === 'Bomber';

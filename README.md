@@ -36,6 +36,8 @@ node build.mjs                 # writes dist/index.html, dist/artifact.html, dis
 node tools/check.cjs           # data check: stores, stations, engine counts, every scene builds
 node tools/ascii.cjs f16 150 20 1 0   # render an aircraft as text in the terminal (key yaw pitch throttle loadout)
 node tools/smoke.cjs           # browser test over every aircraft (needs Playwright)
+node tools/review.cjs f22,f35a # geometry review: top, side, front 3/4, rear 3/4 per aircraft -> tools/out/
+node tools/contact.cjs         # all aircraft on contact sheets (top | side | front); SIDE=1 for large profiles
 ```
 
 ## Layout
@@ -56,7 +58,8 @@ Files numbered below 50 have no DOM, so `dist/engine.cjs` runs in node.
 
 Copy an entry in `src/35-aircraft.js`. Geometry is written in metres aft of the nose (`s`), up (`y`) and to starboard (`z`):
 
-- `fus` / `pod` / `canopy`: lofted bodies through stations `[s, halfWidth, top, bottom, yCentre, n]`; `n` 2 is an ellipse, higher is boxier, lower gives stealth chines.
+- `fus` / `pod` / `canopy`: lofted bodies through stations `[s, halfWidth, top, bottom, yCentre, n]`; `n` 2 is an ellipse, higher is boxier. `rake: { bot, out }` sweeps an intake lip back; `box: true` makes it a sharp rectangular duct.
+- `{ t: 'ploft' }`: faceted, flat-shaded bodies for stealth shaping, through stations `[s, ring, yCentre]`. `hexa(w, top, bottom, chineY)` gives a chined cross-section, `duct(...)` a trapezoid intake with a raked lip.
 - `wing` / `surf`: airfoil panels through sections `[sLeadingEdge, y, z, chord, thickness]`; `trap()` and `vfin()` build them from sweep and span.
 - `noz`: one per engine; the check fails if the count does not match `eng.n`.
 - `stations`: on a named wing (`on`, span fraction `f`) or at a point (`at`); `kind` is pylon, rail, conf, semi or bay.

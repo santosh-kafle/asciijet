@@ -33,7 +33,7 @@ for (const a of AIRCRAFT) Object.assign(a, DETAILS[a.key] || {});
 // camo: cols = camouflage colours (noise pattern), top = darker upper surfaces, under = underside colour.
 // gear: legs [{ s (m aft of nose), z, r (wheel radius), n (wheels: 1, 2 or 4), mirror }].
 const VISUALS = {
-  f16: { camo: { top: '#7f888f', under: '#a3abb1' }, gear: [{ s: 4.6, z: 0, r: 0.25, n: 1 }, { s: 9.3, z: 1.18, r: 0.38, n: 1, mirror: true }] },
+  f16: { camo: { top: '#7f888f', under: '#a3abb1' }, gear: [{ s: 5.6, z: 0, r: 0.25, n: 1, y: -1.2 }, { s: 9.3, z: 1.18, r: 0.38, n: 1, mirror: true }] },
   f22: { camo: { cols: ['#8b939a', '#767f86', '#949ca3'], f: 0.3 }, gear: [{ s: 3.4, z: 0, r: 0.3, n: 1 }, { s: 11.2, z: 1.6, r: 0.42, n: 1, mirror: true }] },
   f35a: { camo: { under: '#80878d' }, gear: [{ s: 3.6, z: 0, r: 0.28, n: 1 }, { s: 9.4, z: 1.35, r: 0.4, n: 1, mirror: true }] },
   f15e: { camo: { under: '#737a7f' }, gear: [{ s: 4.4, z: 0, r: 0.3, n: 1 }, { s: 11.4, z: 1.37, r: 0.42, n: 1, mirror: true }] },

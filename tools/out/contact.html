@@ -99,12 +99,14 @@ function loft(M, st, o = {}) {
   const seg = Math.round((o.seg || 18) * (M.segMul || 1)), tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
   const rings = [];
   for (const [s, hw, top, bot, yc = 0, n = 2] of st) {
-    const ring = [], e = 2 / n;
+    const ring = [], e = 2 / n, first = !rings.length && o.rake;
     for (let k = 0; k < seg; k++) {
       const a = (k / seg) * Math.PI * 2 + (o.rot || 0), c = Math.cos(a), sn = Math.sin(a);
       const zz = hw * Math.sign(c) * Math.abs(c) ** e;
       const yy = yc + (sn >= 0 ? top : bot) * Math.sign(sn) * Math.abs(sn) ** e;
-      ring.push(M.vert(...tf(x0 - s, yy, z0 + zz)));
+      let ds = 0;
+      if (first) ds = (o.rake.bot || 0) * (1 - sn) / 2 + (o.rake.out || 0) * Math.max(0, c * Math.sign(z0 || 1));
+      ring.push(M.vert(...tf(x0 - s - ds, yy, z0 + zz)));
     }
     rings.push(ring);
   }
@@ -116,7 +118,8 @@ function loft(M, st, o = {}) {
   }
   const cap = (ring, stn, m) => {
     if (stn[1] < 0.02 && stn[2] < 0.02) return;
-    const c = M.vert(...tf(x0 - stn[0], stn[4] || 0, z0));
+    const rk = ring === rings[0] && o.rake ? ((o.rake.bot || 0) + (o.rake.out || 0)) / 2 : 0;
+    const c = M.vert(...tf(x0 - stn[0] - rk, stn[4] || 0, z0));
     for (let k = 0; k < seg; k++) M.tri(c, ring[k], ring[(k + 1) % seg], m, tag);
   };
   M.sub = 15;
@@ -228,6 +231,50 @@ function panelPoint(secs, f, c, side = -1) {
   }
   return [0, 0, 0, 1];
 }
+
+// ---- faceted bodies for stealth shaping
+// Polygon loft through stations { s, pts: [[z, y, ds], ...] full ring, yc }. Flat-shaded by default:
+// every face gets its own vertices, so chines stay sharp. ds shifts a point aft (raked intake lips).
+function ploft(M, st, o = {}) {
+  const tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, zs = o.zs || 1, mat = o.mat || 'skin', tag = o.tag || 0, flat = o.flat !== false;
+  const rings = st.map(({ s, pts, yc = 0 }) => pts.map(([z, y, ds = 0]) => tf(x0 - s - ds, yc + y, z0 + zs * z)));
+  const n = rings[0].length;
+  const shared = flat ? null : rings.map(r => r.map(p => M.vert(...p)));
+  for (let i = 0; i + 1 < rings.length; i++) {
+    if (o.seams) M.sub = Math.floor((st[i].s + st[i + 1].s) / 2 / o.seams);
+    for (let k = 0; k < n; k++) {
+      const k2 = (k + 1) % n;
+      if (flat) {
+        const a = M.vert(...rings[i][k]), b = M.vert(...rings[i][k2]), c = M.vert(...rings[i + 1][k2]), d = M.vert(...rings[i + 1][k]);
+        M.quad(a, b, c, d, mat, tag);
+      } else M.quad(shared[i][k], shared[i][k2], shared[i + 1][k2], shared[i + 1][k], mat, tag);
+    }
+  }
+  M.sub = 15;
+  const cap = (ring, m) => {
+    const c = [0, 1, 2].map(j => ring.reduce((s, p) => s + p[j], 0) / ring.length);
+    const span = Math.max(...ring.map(p => Math.hypot(p[1] - c[1], p[2] - c[2])));
+    if (span < 0.02) return;
+    const ci = M.vert(...c), ids = ring.map(p => M.vert(...p));
+    for (let k = 0; k < n; k++) M.tri(ci, ids[k], ids[(k + 1) % n], m, tag);
+  };
+  cap(rings[0], o.capF || mat);
+  cap(rings[rings.length - 1], o.capB || mat);
+  M.sub = 0;
+}
+
+// Right half (top centre round to bottom centre) -> full ring mirrored about z = 0.
+const mirrorHalf = half => [...half, ...half.slice(1, -1).reverse().map(([z, y, ds]) => [-z, y, ds])];
+// Stealth cross-section: flat top out to tf*w, chine edge at height c, flat bottom out to bf*w.
+const hexa = (w, t, b, c = 0, tf = 0.4, bf = 0.5) => mirrorHalf([[0, t], [w * tf, t * 0.97], [w, c], [w * bf, -b * 0.97], [0, -b]]);
+// Trapezoid intake duct (full ring, centred on its own axis): inner wall width, outer lip leaning,
+// rake = how far aft [top-inner, top-outer, bottom-outer, bottom-inner] sit behind the lip.
+const duct = (wi, wo, h, lean = 0.15, rake = [0, 0, 0, 0]) => {
+  const pts = [[-wi, h / 2, rake[0]], [wo, h / 2, rake[1]], [wo - lean, -h / 2, rake[2]], [-wi, -h / 2, rake[3]]];
+  const out = [];
+  for (let k = 0; k < 4; k++) { const a = pts[k], b = pts[(k + 1) % 4]; out.push(a, a.map((v, j) => lerp(v, b[j], 0.5))); }
+  return out;
+};
 
 // ---- 20-stores.js
 // Weapons, fuel tanks and pods. Masses and sizes are published figures for the variant named;
@@ -552,6 +599,15 @@ function buildScene(ac, o = {}) {
       if (p.t === 'loft') {
         let st = p.st;
         if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
+        if (p.box) {   // sharp-edged rectangular intake duct with the same stations and rake
+          const sg = Math.sign(p.z || 1) * zs, rk = p.rake || {};
+          const pst = st.map(([ss, hw, top, bot, yc = 0], i) => {
+            const c = [[-hw, top], [0, top], [hw, top], [hw, 0], [hw, -bot], [0, -bot], [-hw, -bot], [-hw, 0]];
+            return { s: ss, yc, pts: c.map(([z, y]) => [z, y, i ? 0 : (rk.bot || 0) * (top - y) / ((top + bot) || 1) + (rk.out || 0) * Math.max(0, z * sg / (hw || 1))]) };
+          });
+          ploft(M, pst, { x0: L / 2, z: (p.z || 0) * zs, mat: p.mat, capF: p.capF, capB: p.capB });
+          continue;
+        }
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
           const out = [st[0]];
           for (let i = 1; i < st.length; i++) {
@@ -560,7 +616,21 @@ function buildScene(ac, o = {}) {
           }
           st = out;
         }
-        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
+        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, rake: p.rake, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
+      } else if (p.t === 'ploft') {
+        let st = p.st.map(([s, pts, yc = 0]) => ({ s, pts, yc }));
+        if (p.fine) {   // resample so bay cut-outs follow the bay outline
+          const out = [st[0]];
+          for (let i = 1; i < st.length; i++) {
+            const a = st[i - 1], b = st[i], k = Math.max(1, Math.ceil((b.s - a.s) / p.fine));
+            for (let j = 1; j <= k; j++) {
+              const u = j / k;
+              out.push({ s: lerp(a.s, b.s, u), yc: lerp(a.yc, b.yc, u), pts: a.pts.map((q, m) => q.map((v, c) => lerp(v || 0, b.pts[m][c] || 0, u))) });
+            }
+          }
+          st = out;
+        }
+        ploft(M, st, { x0: L / 2, z: (p.z || 0) * zs, zs, mat: p.mat, capF: p.capF, capB: p.capB, flat: p.flat, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
         let secs = panelSections(p, L, sweep);
         if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
@@ -785,16 +855,24 @@ function markings(M, ac, panels) {
 
 // Canopy seated on the fuselage top line: keeps the authored length and width, raises the bubble
 // to the given height above the spine (windscreen steeper than the rear).
-function fuselageTop(ac, s) {
-  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
-  const st = f.st;
-  if (s <= st[0][0]) return (st[0][4] || 0) + st[0][2];
-  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
-    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
-    return lerp((st[i][4] || 0) + st[i][2], (st[i + 1][4] || 0) + st[i + 1][2], u);
-  }
-  return (st[st.length - 1][4] || 0) + st[st.length - 1][2];
+// Top and bottom of the main fuselage at s (round loft or faceted ploft).
+function mainBody(ac) {
+  return ac.geo.find(p => (p.t === 'loft' || p.t === 'ploft') && !p.z && p.fine !== 0 && p.mat !== 'glass' && p.mat !== 'gold') || ac.geo[0];
 }
+function bodyExtent(ac, s) {
+  const f = mainBody(ac);
+  const ext = f.t === 'ploft'
+    ? f.st.map(([ss, pts, yc = 0]) => [ss, yc + Math.max(...pts.map(q => q[1])), yc + Math.min(...pts.map(q => q[1]))])
+    : f.st.map(q => [q[0], (q[4] || 0) + q[2], (q[4] || 0) - q[3]]);
+  if (s <= ext[0][0]) return { top: ext[0][1], bot: ext[0][2] };
+  for (let i = 0; i + 1 < ext.length; i++) if (s >= ext[i][0] && s <= ext[i + 1][0]) {
+    const u = (s - ext[i][0]) / ((ext[i + 1][0] - ext[i][0]) || 1);
+    return { top: lerp(ext[i][1], ext[i + 1][1], u), bot: lerp(ext[i][2], ext[i + 1][2], u) };
+  }
+  const e = ext[ext.length - 1];
+  return { top: e[1], bot: e[2] };
+}
+const fuselageTop = (ac, s) => bodyExtent(ac, s).top;
 function bubbleStations(ac, st, h) {
   const s0 = st[0][0], s1 = st[st.length - 1][0], w = Math.max(...st.map(x => x[1])), out = [];
   for (let i = 0; i <= 12; i++) {
@@ -806,15 +884,7 @@ function bubbleStations(ac, st, h) {
   return out;
 }
 
-function fuselageBottom(ac, s) {
-  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
-  const st = f.st;
-  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
-    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
-    return lerp((st[i][4] || 0) - st[i][3], (st[i + 1][4] || 0) - st[i + 1][3], u);
-  }
-  return -0.5;
-}
+const fuselageBottom = (ac, s) => bodyExtent(ac, s).bot;
 
 function landingGear(M, ac, groundY) {
   const L = ac.dims.len, big = ac.cat === 'Bomber';
@@ -879,7 +949,7 @@ A({
   fact: 'The first fighter built around fly-by-wire and a reclined seat that helps the pilot take 9 g. Its single engine breathes through the chin intake under the cockpit.',
   geo: [
     fus([ring(0, 0.02), ring(0.8, 0.28), [2.0, 0.5, 0.48, 0.45, 0.02, 2], [3.3, 0.62, 0.6, 0.55, 0.05, 2.2], [5.0, 0.72, 0.65, 0.75, 0, 2.3], [6.5, 0.9, 0.7, 0.9, 0, 2.4], [8.5, 0.95, 0.65, 0.9, 0, 2.4], [11, 0.85, 0.6, 0.8, 0, 2.3], [13.2, 0.7, 0.55, 0.65, 0, 2], [14.2, 0.6, 0.5, 0.55, 0, 2]], { capF: 'dark' }),
-    fus([[4.6, 0.55, 0.32, 0.4, -0.98, 2.6], [6.0, 0.56, 0.4, 0.42, -0.9, 2.6], [8.0, 0.5, 0.35, 0.3, -0.62, 2.2], [9.0, 0.3, 0.2, 0.1, -0.45, 2]], { capF: 'hole', fine: 0 }),
+    fus([[4.6, 0.55, 0.32, 0.4, -0.98, 2.6], [6.0, 0.56, 0.4, 0.42, -0.9, 2.6], [8.0, 0.5, 0.35, 0.3, -0.62, 2.2], [9.0, 0.3, 0.2, 0.1, -0.45, 2]], { capF: 'hole', rake: { bot: 0.35 }, fine: 0 }),
     canopy([[2.6, 0.05, 0.02, 0.02, 0.5], [3.4, 0.36, 0.34, 0.05, 0.58], [4.6, 0.42, 0.42, 0.05, 0.63], [6.0, 0.35, 0.3, 0.05, 0.6], [7.0, 0.08, 0.05, 0.02, 0.58]]),
     fus([[6.2, 0.35, 0.25, 0.1, 0.55, 2], [9, 0.45, 0.22, 0.1, 0.55, 2.4], [12.5, 0.3, 0.12, 0.1, 0.5, 2], [13.6, 0.1, 0.05, 0.05, 0.45, 2]], { fine: 0 }),
     wing('wing', [[4.6, -0.1, 0.72, 7.5, 0.025], [7.2, -0.1, 1.45, 5.0, 0.04], [7.2 + tan(40) * 3.27, -0.1, 4.72, 1.5, 0.04]]),
@@ -919,10 +989,16 @@ A({
   gun: 'M61A2 Vulcan 20 mm, 480 rounds', hard: '3 internal bays (main, two side), 4 underwing', payload: 9100,
   fact: 'The first fighter to combine stealth, supercruise and thrust vectoring. Its weapons ride in three internal bays, and the AMRAAMs are pushed clear of the airflow on hydraulic launchers before they fire.',
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, -0.1, 2], [1.0, 0.36, 0.3, 0.26, -0.06, 1.6], [2.4, 0.62, 0.48, 0.42, 0, 1.6], [3.8, 0.8, 0.66, 0.56, 0.04, 1.6], [5.6, 1.15, 0.78, 0.66, 0.04, 1.7], [7.4, 1.95, 0.86, 0.7, 0, 1.8], [10.5, 2.25, 0.86, 0.7, 0, 1.9], [13.5, 2.05, 0.74, 0.6, 0, 1.9], [16.2, 1.6, 0.46, 0.42, 0, 2.1], [18.0, 1.3, 0.36, 0.32, 0, 2.4]], { capF: 'dark' }),
-    pod([[5.3, 0.5, 0.55, 0.55, -0.15, 1.5], [6.8, 0.6, 0.6, 0.58, -0.1, 1.7], [8.6, 0.5, 0.5, 0.5, -0.05, 2]], 1.55, { capF: 'hole' }),
+    { t: 'ploft', fine: 0.5, capB: 'dark', st: [
+      [0, hexa(0.03, 0.03, 0.03), -0.05], [0.8, hexa(0.34, 0.22, 0.2, -0.02, 0.15, 0.4), -0.06], [2.0, hexa(0.6, 0.4, 0.36, -0.04, 0.2, 0.45), -0.04],
+      [3.4, hexa(0.82, 0.55, 0.48, -0.05, 0.25, 0.5), 0], [5.0, hexa(1.1, 0.66, 0.56, -0.04, 0.3, 0.5), 0.02], [6.5, hexa(1.8, 0.74, 0.6, 0, 0.3, 0.42), 0.02],
+      [8.0, hexa(2.15, 0.8, 0.64, 0.04, 0.36, 0.42), 0], [10.5, hexa(2.3, 0.85, 0.68, 0.06, 0.4, 0.45), 0], [13.5, hexa(2.1, 0.74, 0.58, 0.04, 0.45, 0.5), 0],
+      [16.2, hexa(1.65, 0.5, 0.44, 0.02, 0.5, 0.55), 0], [18.1, hexa(1.35, 0.36, 0.32, 0, 0.55, 0.6), 0]] },
+    { t: 'ploft', z: 1.45, mirror: true, capF: 'hole', st: [
+      [5.9, duct(0.46, 0.44, 1.02, 0.2, [0, 0.3, 0.8, 0.5]), -0.24], [7.2, duct(0.48, 0.46, 1.05, 0.22), -0.22],
+      [9.2, duct(0.4, 0.38, 0.85, 0.15), -0.15], [10.8, duct(0.3, 0.25, 0.6, 0.1), -0.12]] },
     canopy([[2.8, 0.05, 0.02, 0.02, 0.5], [3.6, 0.4, 0.42, 0.05, 0.56], [5.0, 0.45, 0.5, 0.05, 0.6], [6.6, 0.32, 0.34, 0.05, 0.62], [7.8, 0.06, 0.06, 0.02, 0.62]], { mat: 'gold' }),
-    wing('wing', trap(7.8, -0.05, 1.9, 8.4, 6.78, 42, 1.9, -3.25, 0.045)),
+    wing('wing', trap(7.8, 0.02, 1.9, 8.4, 6.78, 42, 1.9, -3.25, 0.045)),
     surf(trap(15.3, -0.15, 1.7, 3.4, 4.45, 42, 1.3, 0, 0.04)),
     surf(vfin(13.0, 0.66, 1.45, 3.9, 2.9, 23, 1.4, 28, 0.045)),
     noz({ shape: '2d', s: 18.92, z: 0.62, w: 0.52, h: 0.34, len: 1.3, mirror: true }),
@@ -954,8 +1030,14 @@ A({
   gun: 'GAU-22/A 25 mm, 180 rounds (internal)', hard: '4 internal bay stations, 6 underwing', payload: 8160,
   fact: 'The F135 is the most powerful engine ever fitted to a fighter. Two internal bays each hold one air-to-ground weapon up to 2,000 lb and one AMRAAM on the door.',
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, -0.05, 2], [1.0, 0.38, 0.32, 0.3, 0, 1.7], [2.4, 0.66, 0.52, 0.5, 0.05, 1.7], [4.0, 0.95, 0.7, 0.6, 0.08, 1.8], [6.0, 1.65, 0.8, 0.72, 0.02, 1.9], [9.0, 1.85, 0.8, 0.72, 0, 2], [11.5, 1.6, 0.75, 0.65, 0, 2.1], [13.6, 1.05, 0.62, 0.55, 0, 2.2], [14.6, 0.75, 0.58, 0.55, 0, 2]], { capF: 'dark' }),
-    pod([[4.4, 0.42, 0.48, 0.45, 0.05, 1.6], [5.6, 0.5, 0.55, 0.5, 0.02, 1.8], [7.4, 0.4, 0.45, 0.4, 0, 2]], 1.2, { capF: 'hole' }),
+    { t: 'ploft', fine: 0.5, capB: 'dark', st: [
+      [0, hexa(0.03, 0.03, 0.03), -0.02], [0.8, hexa(0.36, 0.24, 0.22, -0.04, 0.2, 0.45), -0.02], [2.0, hexa(0.66, 0.44, 0.42, -0.06, 0.25, 0.5), 0.02],
+      [3.4, hexa(0.92, 0.6, 0.56, -0.06, 0.3, 0.5), 0.06], [4.8, hexa(1.2, 0.72, 0.62, -0.04, 0.35, 0.5), 0.06], [6.5, hexa(1.78, 0.82, 0.72, 0, 0.4, 0.48), 0.03],
+      [9.0, hexa(1.9, 0.84, 0.74, 0.02, 0.42, 0.5), 0], [11.5, hexa(1.65, 0.78, 0.66, 0, 0.45, 0.52), 0], [13.6, hexa(1.1, 0.64, 0.56, 0, 0.5, 0.6), 0],
+      [14.6, hexa(0.8, 0.58, 0.55, 0, 0.6, 0.7), 0]] },
+    { t: 'ploft', z: 1.08, mirror: true, capF: 'hole', st: [
+      [4.3, duct(0.32, 0.34, 0.85, 0.2, [0.35, 0, 0.2, 0.5]), 0.0], [5.6, duct(0.36, 0.36, 0.9, 0.2), 0.0], [7.4, duct(0.3, 0.3, 0.75, 0.15), 0.0]] },
+    pod([[3.5, 0.02, 0.02, 0.02, 0.05], [4.1, 0.16, 0.3, 0.3, 0.05], [4.7, 0.04, 0.1, 0.1, 0.05]], 0.98),
     canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.38, 0.42, 0.05, 0.62], [4.6, 0.45, 0.5, 0.05, 0.7], [6.2, 0.3, 0.3, 0.05, 0.72], [7.2, 0.05, 0.05, 0.02, 0.7]], { mat: 'gold' }),
     wing('wing', trap(6.6, -0.05, 1.6, 6.2, 5.35, 34, 2.2, -2, 0.05)),
     surf(trap(12.6, -0.05, 1.2, 3.0, 3.45, 34, 1.1, 0, 0.04)),
@@ -991,7 +1073,7 @@ A({
   fact: 'A two-seat strike version of the air superiority Eagle. Conformal fuel tanks hug the intakes and carry bombs in rows, so the wing pylons stay free for fuel and missiles.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.42, 0.42, 0, 2], [2.8, 0.62, 0.62, 0.6, 0.05, 2], [4.5, 0.72, 0.72, 0.62, 0.12, 2.2], [6.5, 0.8, 0.75, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.55, 0.5, 0, 3], [15.5, 1.35, 0.5, 0.5, 0, 3], [17.8, 1.25, 0.45, 0.45, 0, 3], [18.6, 1.2, 0.42, 0.42, 0, 3]], { capF: 'dark' }),
-    pod([[5.6, 0.55, 0.62, 0.62, -0.2, 4], [7, 0.58, 0.62, 0.62, -0.15, 4], [10, 0.55, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.45, { capF: 'hole' }),
+    pod([[5.6, 0.55, 0.62, 0.62, -0.2, 4], [7, 0.58, 0.62, 0.62, -0.15, 4], [10, 0.55, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.45, { box: true, capF: 'hole', rake: { bot: 0.7 } }),
     pod([[7.5, 0.1, 0.1, 0.1, -0.5, 2], [8.5, 0.42, 0.42, 0.42, -0.5, 2.5], [13, 0.42, 0.42, 0.42, -0.45, 2.5], [14.5, 0.08, 0.1, 0.1, -0.4, 2]], 1.75),
     canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.42, 0.42, 0.05, 0.8], [5.5, 0.48, 0.52, 0.05, 0.86], [7.2, 0.46, 0.5, 0.05, 0.86], [8.6, 0.3, 0.25, 0.05, 0.82], [9.6, 0.08, 0.05, 0.02, 0.76]]),
     wing('wing', trap(8.8, 0.3, 1.9, 6.4, 6.52, 45, 2.0, -1, 0.05)),
@@ -1029,7 +1111,7 @@ A({
   fact: 'Bigger than the original Hornet in almost every dimension, with caret intakes and outward-angled pylons that stop released stores from striking the aircraft.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.45, 0.45, 0.42, 0, 2], [3.0, 0.68, 0.66, 0.6, 0.08, 2.2], [5.0, 0.8, 0.72, 0.6, 0.15, 2.3], [7.5, 1.25, 0.7, 0.6, 0.05, 2.6], [11, 1.4, 0.62, 0.6, 0, 2.8], [14.5, 1.25, 0.55, 0.55, 0, 2.8], [16.8, 1.05, 0.45, 0.45, 0, 2.6], [17.6, 0.9, 0.42, 0.42, 0, 2.4]], { capF: 'dark' }),
-    pod([[7.0, 0.45, 0.42, 0.5, -0.5, 1.8], [8.5, 0.5, 0.45, 0.5, -0.42, 2.5], [11, 0.4, 0.4, 0.4, -0.3, 2]], 1.3, { capF: 'hole' }),
+    pod([[7.0, 0.45, 0.42, 0.5, -0.5, 1.8], [8.5, 0.5, 0.45, 0.5, -0.42, 2.5], [11, 0.4, 0.4, 0.4, -0.3, 2]], 1.3, { capF: 'hole', rake: { bot: 0.35, out: 0.45 } }),
     canopy([[3.2, 0.05, 0.02, 0.02, 0.72], [4.0, 0.4, 0.4, 0.05, 0.8], [5.6, 0.45, 0.5, 0.05, 0.86], [7.2, 0.32, 0.3, 0.05, 0.84], [8.6, 0.06, 0.05, 0.02, 0.76]]),
     wing('wing', [[4.2, 0.25, 0.7, 9.0, 0.02], [8.4, 0.15, 2.2, 5.0, 0.045], [10.55, 0.1, 6.25, 1.7, 0.04]]),
     surf(trap(15.2, 0.0, 1.2, 3.1, 3.45, 40, 1.3, -2, 0.04)),
@@ -1068,7 +1150,7 @@ A({
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.5, 0.45, 0, 2], [3.2, 0.72, 0.7, 0.62, 0.1, 2.2], [5.0, 0.82, 0.78, 0.62, 0.18, 2.3], [7.0, 0.95, 0.78, 0.6, 0.12, 2.5], [9.5, 1.1, 0.55, 0.45, 0.05, 3], [13, 1.0, 0.35, 0.35, 0.05, 3], [16.5, 0.75, 0.25, 0.25, 0.05, 3], [18.4, 0.4, 0.15, 0.15, 0.05, 2]], { capF: 'dark' }),
     fus([[7.5, 1.2, 0.3, 0.3, 0.05, 4], [10, 2.3, 0.3, 0.3, 0, 4], [14, 2.3, 0.3, 0.3, 0, 4], [17, 1.9, 0.25, 0.25, 0, 4], [17.8, 1.5, 0.2, 0.2, 0, 3]]),
-    pod([[7.2, 0.55, 0.62, 0.62, -0.3, 4], [9, 0.6, 0.65, 0.65, -0.3, 3.5], [13, 0.62, 0.6, 0.6, -0.2, 2.5], [16.8, 0.55, 0.55, 0.55, -0.15, 2], [17.9, 0.5, 0.5, 0.5, -0.1, 2]], 1.45, { capF: 'hole' }),
+    pod([[7.2, 0.55, 0.62, 0.62, -0.3, 4], [9, 0.6, 0.65, 0.65, -0.3, 3.5], [13, 0.62, 0.6, 0.6, -0.2, 2.5], [16.8, 0.55, 0.55, 0.55, -0.15, 2], [17.9, 0.5, 0.5, 0.5, -0.1, 2]], 1.45, { box: true, capF: 'hole', rake: { bot: 0.9 } }),
     canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.45, 0.05, 0.86], [6.0, 0.5, 0.55, 0.05, 0.92], [7.8, 0.45, 0.48, 0.05, 0.92], [9.2, 0.25, 0.2, 0.05, 0.86], [10.2, 0.05, 0.05, 0.02, 0.8]]),
     surf([[6.5, 0.1, 1.2, 6.0, 0.03], [9.8, 0.1, 2.7, 3.6, 0.04]]),
     wing('wing', [[9.9, 0.1, 2.7, 3.7, 0.05], [12.47, 0.1, 9.77, 1.4, 0.05]], { pivot: [11.4, 2.7], sweep: { def: 20 } }),
@@ -1104,7 +1186,7 @@ A({
   fact: 'Built as a Navy interceptor, it became the West\'s standard fighter-bomber of the 1960s and 70s. The E added the internal gun that Vietnam showed was missing. Note the upturned outer wings and drooping tail.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.42, 0.42, 0.42, 0, 2], [3.2, 0.62, 0.62, 0.6, 0.05, 2.1], [5.0, 0.72, 0.72, 0.6, 0.1, 2.2], [7.0, 0.8, 0.75, 0.6, 0.08, 2.3], [10, 1.25, 0.7, 0.62, 0, 2.6], [13.5, 1.2, 0.62, 0.55, 0, 2.5], [16, 0.8, 0.55, 0.45, 0.1, 2.2], [18.4, 0.35, 0.4, 0.25, 0.25, 2], [19.2, 0.1, 0.15, 0.1, 0.3, 2]], { capF: 'dark' }),
-    pod([[5.6, 0.35, 0.6, 0.6, 0, 3], [7.5, 0.45, 0.62, 0.62, -0.05, 3], [11, 0.45, 0.55, 0.55, -0.05, 2.5]], 1.1, { capF: 'hole' }),
+    pod([[5.6, 0.35, 0.6, 0.6, 0, 3], [7.5, 0.45, 0.62, 0.62, -0.05, 3], [11, 0.45, 0.55, 0.55, -0.05, 2.5]], 1.1, { box: true, capF: 'hole', rake: { bot: 0.3 } }),
     canopy([[3.6, 0.05, 0.02, 0.02, 0.62], [4.4, 0.42, 0.42, 0.05, 0.7], [6, 0.48, 0.5, 0.05, 0.76], [8.4, 0.46, 0.46, 0.05, 0.76], [10.2, 0.3, 0.25, 0.05, 0.7], [11, 0.06, 0.05, 0.02, 0.66]]),
     wing('wing', trap(8.8, -0.25, 1.1, 6.6, 3.9, 45, 4.3, 0, 0.05)),
     surf([[11.3, -0.25, 3.9, 4.5, 0.045], [13.25, 0.16, 5.85, 1.6, 0.04]]),
@@ -1141,7 +1223,7 @@ A({
   est: ['radius'],
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.48, 0.48, 0.45, 0, 2], [3.5, 0.72, 0.72, 0.62, 0.05, 2.1], [5.5, 0.82, 0.85, 0.62, 0.12, 2.2], [7.5, 0.95, 0.85, 0.55, 0.1, 2.4], [10, 1.4, 0.6, 0.35, 0, 3], [14, 1.5, 0.45, 0.3, 0, 3.5], [17.5, 0.9, 0.35, 0.3, 0, 3], [20.5, 0.35, 0.3, 0.3, 0, 2], [21.9, 0.2, 0.2, 0.2, 0, 2]], { capF: 'dark' }),
-    pod([[8.0, 0.55, 0.55, 0.62, -0.75, 4], [10, 0.62, 0.6, 0.62, -0.7, 3.5], [14, 0.62, 0.62, 0.62, -0.55, 2.5], [18, 0.6, 0.6, 0.6, -0.4, 2], [19.8, 0.58, 0.58, 0.58, -0.35, 2]], 1.25, { capF: 'hole' }),
+    pod([[8.0, 0.55, 0.55, 0.62, -0.75, 4], [10, 0.62, 0.6, 0.62, -0.7, 3.5], [14, 0.62, 0.62, 0.62, -0.55, 2.5], [18, 0.6, 0.6, 0.6, -0.4, 2], [19.8, 0.58, 0.58, 0.58, -0.35, 2]], 1.25, { box: true, capF: 'hole', rake: { bot: 0.8 } }),
     canopy([[3.4, 0.05, 0.02, 0.02, 0.82], [4.2, 0.42, 0.45, 0.05, 0.9], [5.8, 0.48, 0.55, 0.05, 0.96], [7.2, 0.4, 0.4, 0.05, 0.95], [8.8, 0.12, 0.08, 0.02, 0.9]]),
     wing('wing', [[6.0, 0.05, 0.7, 10.0, 0.02], [9.3, 0.0, 2.6, 7.4, 0.04], [13.53, 0.0, 7.3, 1.8, 0.04]]),
     surf(trap(18.0, -0.35, 2.3, 3.1, 5.0, 42, 1.2, 0, 0.04)),
@@ -1177,8 +1259,13 @@ A({
   fact: 'Russia\'s first stealth fighter keeps its missiles in two long tandem bays between widely spaced engines, with small side bays in the wing roots for dogfight missiles.',
   est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'payload', 'ferry'],
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.42, 0.38, 0, 1.6], [3.6, 0.75, 0.65, 0.55, 0.05, 1.6], [5.6, 1.0, 0.75, 0.55, 0.08, 1.7], [7.5, 1.8, 0.72, 0.5, 0, 1.9], [11, 2.1, 0.62, 0.45, 0, 2.2], [15, 1.9, 0.45, 0.35, 0, 2.2], [18, 1.4, 0.35, 0.3, 0, 2.2], [19.5, 0.8, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
-    pod([[6.8, 0.55, 0.45, 0.6, -0.65, 3], [9, 0.62, 0.5, 0.62, -0.6, 3], [13, 0.62, 0.55, 0.62, -0.5, 2.5], [17, 0.58, 0.55, 0.58, -0.4, 2], [19.2, 0.56, 0.56, 0.56, -0.35, 2]], 1.35, { capF: 'hole' }),
+    { t: 'ploft', fine: 0.5, capB: 'dark', st: [
+      [0, hexa(0.03, 0.03, 0.03), 0], [1.5, hexa(0.5, 0.4, 0.36, -0.02, 0.15, 0.45), 0], [3.6, hexa(0.78, 0.62, 0.52, -0.03, 0.25, 0.5), 0.05],
+      [5.6, hexa(1.05, 0.72, 0.55, -0.02, 0.3, 0.5), 0.08], [7.5, hexa(1.85, 0.72, 0.5, 0, 0.35, 0.45), 0], [11, hexa(2.1, 0.62, 0.45, 0.02, 0.45, 0.5), 0],
+      [15, hexa(1.9, 0.5, 0.38, 0.02, 0.5, 0.55), 0], [18, hexa(1.4, 0.38, 0.32, 0, 0.55, 0.6), 0], [19.5, hexa(0.8, 0.26, 0.25, 0, 0.5, 0.6), 0]] },
+    { t: 'ploft', z: 1.35, mirror: true, capF: 'hole', st: [
+      [6.8, duct(0.5, 0.5, 1.0, 0.2, [0, 0.25, 0.75, 0.5]), -0.7], [9, duct(0.6, 0.6, 1.1, 0.2), -0.62], [13, duct(0.62, 0.62, 1.1, 0.1), -0.5],
+      [17, duct(0.58, 0.58, 1.05, 0), -0.4], [19.2, duct(0.56, 0.56, 1.0, 0), -0.35]] },
     canopy([[3.0, 0.05, 0.02, 0.02, 0.62], [3.8, 0.4, 0.42, 0.05, 0.7], [5.3, 0.45, 0.5, 0.05, 0.75], [6.8, 0.3, 0.3, 0.05, 0.75], [8.0, 0.05, 0.05, 0.02, 0.72]]),
     wing('wing', [[5.5, 0.0, 1.1, 11.0, 0.02], [8.8, 0.0, 2.4, 8.2, 0.035], [13.8, 0.0, 6.9, 1.9, 0.04]]),
     surf(trap(16.2, -0.2, 2.3, 3.2, 5.2, 45, 1.4, 0, 0.04)),
@@ -1212,7 +1299,7 @@ A({
   fact: 'Built for short, rough airfields: doors close the main intakes on the ground and air comes in through louvres on top of the wing roots, so the engines do not swallow debris.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.42, 0.42, 0.4, 0, 2], [3, 0.62, 0.62, 0.55, 0.05, 2.1], [4.8, 0.72, 0.75, 0.55, 0.12, 2.2], [6.6, 0.8, 0.7, 0.5, 0.1, 2.4], [9, 1.2, 0.5, 0.3, 0, 3], [12.5, 1.25, 0.4, 0.3, 0, 3.5], [15, 0.7, 0.3, 0.25, 0, 3], [16.6, 0.3, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
-    pod([[6.2, 0.45, 0.45, 0.55, -0.65, 4], [8, 0.52, 0.5, 0.55, -0.6, 3.5], [11.5, 0.52, 0.5, 0.52, -0.45, 2.5], [15, 0.5, 0.5, 0.5, -0.35, 2], [16.6, 0.48, 0.48, 0.48, -0.3, 2]], 1.05, { capF: 'hole' }),
+    pod([[6.2, 0.45, 0.45, 0.55, -0.65, 4], [8, 0.52, 0.5, 0.55, -0.6, 3.5], [11.5, 0.52, 0.5, 0.52, -0.45, 2.5], [15, 0.5, 0.5, 0.5, -0.35, 2], [16.6, 0.48, 0.48, 0.48, -0.3, 2]], 1.05, { box: true, capF: 'hole', rake: { bot: 0.8 } }),
     canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.4, 0.42, 0.05, 0.8], [5.2, 0.44, 0.5, 0.05, 0.85], [6.5, 0.36, 0.36, 0.05, 0.85], [7.8, 0.1, 0.06, 0.02, 0.8]]),
     wing('wing', [[4.6, 0.0, 0.6, 8.6, 0.02], [7.5, 0, 2.0, 5.4, 0.04], [10.8, 0, 5.68, 1.3, 0.04]]),
     surf(trap(14.4, -0.3, 1.8, 2.6, 3.9, 50, 1.0, 0, 0.04)),
@@ -1245,7 +1332,7 @@ A({
   fact: 'Built from steel, titanium and aluminium to patrol the Arctic at Mach 2.35 against cruise missiles and SR-71s. The MiG-31K variant carries the Kinzhal ballistic missile on the centreline.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.8, 0.55, 0.55, 0.5, 0, 2], [3.8, 0.8, 0.8, 0.7, 0.05, 2.2], [5.5, 0.9, 0.95, 0.7, 0.12, 2.3], [7.5, 1.3, 0.85, 0.75, 0.05, 3], [10, 1.75, 0.75, 0.8, 0, 4], [15, 1.8, 0.7, 0.8, 0, 4], [19, 1.75, 0.65, 0.75, 0, 4], [21.8, 1.7, 0.6, 0.7, 0, 4]], { capF: 'dark' }),
-    pod([[7.2, 0.5, 0.85, 0.8, -0.05, 5], [9, 0.55, 0.85, 0.85, -0.05, 4], [11, 0.4, 0.7, 0.7, 0, 3]], 1.45, { capF: 'hole' }),
+    pod([[7.2, 0.5, 0.85, 0.8, -0.05, 5], [9, 0.55, 0.85, 0.85, -0.05, 4], [11, 0.4, 0.7, 0.7, 0, 3]], 1.45, { box: true, capF: 'hole', rake: { bot: 0.9 } }),
     canopy([[3.8, 0.05, 0.02, 0.02, 0.86], [4.6, 0.42, 0.42, 0.05, 0.95], [6.2, 0.5, 0.55, 0.05, 1.0], [8.2, 0.5, 0.52, 0.05, 1.0], [9.8, 0.3, 0.28, 0.05, 0.95], [10.8, 0.06, 0.05, 0.02, 0.9]]),
     wing('wing', trap(10.5, 0.6, 1.8, 6.2, 6.73, 41, 1.9, -5, 0.045)),
     surf(trap(18.6, 0.15, 1.8, 3.2, 4.4, 50, 1.3, 0, 0.04)),
@@ -1313,7 +1400,7 @@ A({
   fact: 'An unstable canard delta that needs its flight computers to stay in the air, which makes it very agile. It can cruise above Mach 1 without afterburner.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.4, 0.42, 0.42, 0.4, 0, 2], [3.0, 0.6, 0.6, 0.55, 0.05, 2.1], [4.8, 0.68, 0.72, 0.62, 0.1, 2.2], [6.8, 0.85, 0.7, 0.8, 0, 2.6], [9.5, 1.05, 0.62, 0.75, 0, 2.8], [12.5, 0.95, 0.55, 0.55, 0, 2.6], [14.5, 0.85, 0.5, 0.5, 0, 2.4], [15.4, 0.8, 0.48, 0.48, 0, 2.3]], { capF: 'dark' }),
-    fus([[5.2, 0.72, 0.35, 0.35, -1.05, 4], [6.6, 0.75, 0.35, 0.4, -0.95, 4], [9, 0.6, 0.3, 0.3, -0.7, 3], [10.5, 0.3, 0.2, 0.2, -0.5, 2]], { capF: 'hole', fine: 0 }),
+    fus([[5.2, 0.72, 0.35, 0.35, -1.05, 4], [6.6, 0.75, 0.35, 0.4, -0.95, 4], [9, 0.6, 0.3, 0.3, -0.7, 3], [10.5, 0.3, 0.2, 0.2, -0.5, 2]], { box: true, capF: 'hole', rake: { bot: -0.35 }, fine: 0 }),
     canopy([[2.8, 0.05, 0.02, 0.02, 0.6], [3.6, 0.38, 0.4, 0.05, 0.68], [5.0, 0.42, 0.48, 0.05, 0.72], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.06, 0.05, 0.02, 0.66]]),
     surf(trap(4.8, 0.1, 0.6, 1.7, 2.1, 50, 0.6, 0, 0.04)),
     wing('wing', trap(7.0, -0.2, 0.85, 7.6, 5.2, 53, 1.2, 0, 0.04)),
@@ -1349,7 +1436,7 @@ A({
   fact: 'France builds every major part itself: airframe, M88 engines, radar and weapons. The Rafale also carries the ASMP-A nuclear missile for France\'s airborne deterrent.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.4, 0.38, 0.36, 0, 2], [2.8, 0.58, 0.56, 0.5, 0.05, 2.1], [4.5, 0.68, 0.7, 0.58, 0.1, 2.2], [6.5, 1.15, 0.65, 0.62, 0, 2.8], [9.5, 1.2, 0.6, 0.6, 0, 3], [12.5, 1.0, 0.55, 0.55, 0, 2.8], [14.4, 0.9, 0.5, 0.5, 0, 2.4]], { capF: 'dark' }),
-    pod([[5.0, 0.35, 0.45, 0.5, -0.45, 2.2], [6.5, 0.4, 0.45, 0.5, -0.4, 2.5], [8.5, 0.35, 0.4, 0.4, -0.3, 2]], 0.95, { capF: 'hole' }),
+    pod([[5.0, 0.35, 0.45, 0.5, -0.45, 2.2], [6.5, 0.4, 0.45, 0.5, -0.4, 2.5], [8.5, 0.35, 0.4, 0.4, -0.3, 2]], 0.95, { capF: 'hole', rake: { bot: 0.2, out: 0.25 } }),
     canopy([[2.6, 0.05, 0.02, 0.02, 0.58], [3.4, 0.38, 0.4, 0.05, 0.66], [4.8, 0.42, 0.48, 0.05, 0.7], [6.2, 0.3, 0.28, 0.05, 0.7], [7.2, 0.06, 0.05, 0.02, 0.66]]),
     surf(trap(5.8, 0.25, 0.95, 1.6, 2.5, 50, 0.6, 5, 0.04)),
     wing('wing', trap(7.0, -0.15, 0.95, 7.2, 5.1, 48, 1.2, 0, 0.04)),
@@ -1386,7 +1473,7 @@ A({
   est: ['fuel'],
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.38, 0.38, 0.36, 0, 2], [2.8, 0.52, 0.52, 0.48, 0.05, 2.1], [4.4, 0.6, 0.62, 0.52, 0.1, 2.2], [6.2, 0.95, 0.6, 0.55, 0, 2.6], [9, 0.95, 0.55, 0.55, 0, 2.6], [11.8, 0.75, 0.5, 0.5, 0, 2.3], [13.3, 0.52, 0.45, 0.45, 0, 2]], { capF: 'dark' }),
-    pod([[4.8, 0.3, 0.42, 0.42, -0.1, 2.5], [6.2, 0.35, 0.45, 0.45, -0.1, 2.5], [8, 0.3, 0.4, 0.4, -0.05, 2]], 0.8, { capF: 'hole' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.1, 2.5], [6.2, 0.35, 0.45, 0.45, -0.1, 2.5], [8, 0.3, 0.4, 0.4, -0.05, 2]], 0.8, { capF: 'hole', rake: { out: 0.25 } }),
     canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.36, 0.38, 0.05, 0.62], [4.6, 0.4, 0.45, 0.05, 0.66], [5.8, 0.3, 0.28, 0.05, 0.66], [6.8, 0.05, 0.05, 0.02, 0.62]]),
     surf(trap(5.3, 0.2, 0.8, 1.8, 2.35, 45, 0.8, 0, 0.04)),
     wing('wing', [[7.0, -0.15, 0.85, 5.8, 0.04], [8.6, -0.15, 2.4, 3.9, 0.04], [11.0, -0.15, 4.2, 1.3, 0.04]]),
@@ -1421,8 +1508,13 @@ A({
   fact: 'A long, heavy canard delta built for range. Its side bays swing their missiles out on rails before the doors shut, so it can fire short-range missiles with the bay closed.',
   est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'ferry', 'payload', 'eng', 'wingArea', 'vmax'],
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.5, 0.42, 0.38, 0, 1.6], [3.8, 0.78, 0.65, 0.55, 0.05, 1.6], [5.8, 1.0, 0.8, 0.6, 0.08, 1.7], [8, 1.6, 0.8, 0.62, 0, 1.8], [12, 1.9, 0.72, 0.58, 0, 2], [16, 1.7, 0.58, 0.5, 0, 2.1], [18.8, 1.3, 0.38, 0.35, 0, 2.3], [19.8, 1.1, 0.35, 0.33, 0, 2.3]], { capF: 'dark' }),
-    pod([[5.6, 0.45, 0.5, 0.55, -0.1, 1.6], [7.2, 0.52, 0.52, 0.55, -0.08, 1.8], [9.5, 0.45, 0.45, 0.45, -0.05, 2]], 1.25, { capF: 'hole' }),
+    { t: 'ploft', fine: 0.5, capB: 'dark', st: [
+      [0, hexa(0.03, 0.03, 0.03), 0], [1.6, hexa(0.5, 0.42, 0.38, -0.02, 0.15, 0.45), 0], [3.8, hexa(0.8, 0.66, 0.55, -0.03, 0.25, 0.5), 0.05],
+      [5.8, hexa(1.0, 0.8, 0.6, -0.02, 0.3, 0.5), 0.08], [8, hexa(1.6, 0.8, 0.62, 0, 0.35, 0.45), 0], [12, hexa(1.9, 0.72, 0.58, 0.02, 0.4, 0.5), 0],
+      [16, hexa(1.7, 0.58, 0.5, 0.02, 0.45, 0.55), 0], [18.8, hexa(1.3, 0.42, 0.36, 0, 0.5, 0.6), 0], [19.8, hexa(1.1, 0.36, 0.33, 0, 0.55, 0.6), 0]] },
+    { t: 'ploft', z: 1.18, mirror: true, capF: 'hole', st: [
+      [5.6, duct(0.36, 0.4, 0.95, 0.2, [0.3, 0, 0.25, 0.5]), -0.12], [7.2, duct(0.42, 0.42, 1.0, 0.2), -0.1], [9.5, duct(0.36, 0.36, 0.85, 0.15), -0.06]] },
+    pod([[4.7, 0.02, 0.02, 0.02, 0.02], [5.2, 0.15, 0.3, 0.3, 0.02], [5.8, 0.04, 0.1, 0.1, 0.02]], 1.02),
     canopy([[3.2, 0.05, 0.02, 0.02, 0.6], [4.0, 0.4, 0.42, 0.05, 0.7], [5.6, 0.45, 0.5, 0.05, 0.75], [7.2, 0.3, 0.3, 0.05, 0.75], [8.4, 0.05, 0.05, 0.02, 0.72]], { mat: 'gold' }),
     surf(trap(7.2, 0.25, 1.2, 2.4, 3.5, 50, 0.8, 0, 0.04)),
     wing('wing', [[8.0, 0.05, 1.3, 9.0, 0.02], [10.4, 0.0, 2.3, 7.0, 0.035], [14.4, 0.0, 6.44, 1.9, 0.04]]),
@@ -1455,7 +1547,7 @@ A({
   fact: 'A pure tailless delta like the Mirage III, but made unstable and flown by wire so it can turn hard at low speed. The M53 is a single-shaft engine, unusual for a turbofan.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.4, 0.4, 0.4, 0, 2], [3.2, 0.55, 0.58, 0.52, 0.05, 2.1], [4.8, 0.6, 0.65, 0.55, 0.1, 2.2], [6.5, 0.62, 0.62, 0.6, 0.05, 2.2], [9, 0.62, 0.6, 0.6, 0, 2.2], [12, 0.58, 0.55, 0.55, 0, 2], [13.6, 0.52, 0.5, 0.5, 0, 2]], { capF: 'dark' }),
-    pod([[4.8, 0.3, 0.42, 0.42, -0.05, 1.6], [6.5, 0.35, 0.48, 0.48, 0, 2], [9, 0.3, 0.4, 0.4, 0, 2]], 0.75, { capF: 'hole' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.05, 1.6], [6.5, 0.35, 0.48, 0.48, 0, 2], [9, 0.3, 0.4, 0.4, 0, 2]], 0.75, { capF: 'hole', rake: { out: 0.25 } }),
     canopy([[2.8, 0.05, 0.02, 0.02, 0.58], [3.6, 0.36, 0.38, 0.05, 0.66], [5.0, 0.4, 0.46, 0.05, 0.7], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.05, 0.05, 0.02, 0.66]]),
     wing('wing', trap(6.0, -0.2, 0.6, 8.0, 4.56, 58, 0.9, 0, 0.045)),
     { t: 'panel', sec: vfin(9.3, 0.5, 0, 4.0, 2.9, 57, 1.0, 0, 0.045) },
@@ -1488,7 +1580,7 @@ A({
   fact: 'Built to run in at treetop height at night, following the terrain automatically. Its underwing pylons swivel as the wings sweep so the stores always point into the airflow.',
   geo: [
     fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.48, 0.48, 0.45, 0, 2], [3.4, 0.65, 0.68, 0.6, 0.08, 2.2], [5.2, 0.72, 0.8, 0.62, 0.12, 2.3], [7.2, 1.25, 0.8, 0.62, 0.05, 3.2], [10, 1.4, 0.75, 0.6, 0, 3.4], [13.5, 1.3, 0.65, 0.6, 0, 3], [15.5, 1.0, 0.6, 0.55, 0, 2.6], [16.2, 0.95, 0.55, 0.55, 0, 2.4]], { capF: 'dark' }),
-    pod([[6.2, 0.45, 0.62, 0.55, 0.0, 4], [7.6, 0.5, 0.62, 0.6, 0, 3.5], [10, 0.4, 0.5, 0.5, 0, 3]], 1.1, { capF: 'hole' }),
+    pod([[6.2, 0.45, 0.62, 0.55, 0.0, 4], [7.6, 0.5, 0.62, 0.6, 0, 3.5], [10, 0.4, 0.5, 0.5, 0, 3]], 1.1, { box: true, capF: 'hole', rake: { bot: 0.7 } }),
     canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.42, 0.05, 0.86], [5.8, 0.48, 0.5, 0.05, 0.92], [7.5, 0.44, 0.44, 0.05, 0.92], [8.6, 0.2, 0.15, 0.03, 0.86], [9.2, 0.05, 0.05, 0.02, 0.82]]),
     surf([[6.8, 0.35, 1.2, 4.0, 0.03], [8.4, 0.35, 2.25, 2.6, 0.04]]),
     wing('wing', [[8.3, 0.35, 2.25, 3.2, 0.05], [10.49, 0.35, 6.95, 1.4, 0.05]], { pivot: [9.3, 2.25], sweep: { def: 25 } }),
@@ -1607,7 +1699,7 @@ A({
     canopy([[4.2, 0.05, 0.02, 0.02, 1.2], [5.2, 1.0, 0.5, 0.05, 1.3], [7, 1.25, 0.6, 0.05, 1.45], [8.5, 0.6, 0.3, 0.03, 1.55], [9.2, 0.05, 0.05, 0.02, 1.6]], { mat: 'dark' }),
     surf([[13, 0.3, 2.2, 15.0, 0.04], [18.5, 0.3, 6.6, 8.0, 0.07]]),
     wing('wing', [[18.8, 0.3, 6.6, 6.5, 0.08], [22.63, 0.3, 20.9, 2.2, 0.07]], { pivot: [21.5, 6.6], sweep: { def: 15 } }),
-    pod([[21, 1.55, 0.9, 0.95, -1.9, 4], [23, 1.65, 1.0, 1.0, -1.8, 3.5], [29, 1.6, 1.0, 1.0, -1.7, 3], [32.6, 1.5, 0.9, 0.9, -1.6, 2.5]], 3.3, { capF: 'hole' }),
+    pod([[21, 1.55, 0.9, 0.95, -1.9, 4], [23, 1.65, 1.0, 1.0, -1.8, 3.5], [29, 1.6, 1.0, 1.0, -1.7, 3], [32.6, 1.5, 0.9, 0.9, -1.6, 2.5]], 3.3, { box: true, capF: 'hole', rake: { out: 0.5 } }),
     { t: 'panel', sec: vfin(35.5, 1.3, 0, 7.2, 5.8, 45, 3.0, 0, 0.07) },
     surf(trap(38.8, 1.75, 0.3, 4.8, 6.85, 40, 1.8, 0, 0.07)),
     ...[2.55, 4.05].map(z => noz({ s: 33.4, z, y: -1.6, r: 0.62, len: 1.0, mirror: true })),
@@ -1674,7 +1766,7 @@ A({
     canopy([[5, 0.05, 0.02, 0.02, 1.4], [6, 1.0, 0.5, 0.05, 1.5], [8, 1.3, 0.7, 0.05, 1.7], [10, 0.8, 0.4, 0.03, 1.85], [11, 0.05, 0.05, 0.02, 1.9]], { mat: 'dark' }),
     surf([[15, 0.5, 2.8, 20, 0.04], [23, 0.5, 9.6, 10.5, 0.07]]),
     wing('wing', [[24.5, 0.5, 9.6, 7.4, 0.08], [31.14, 0.3, 27.85, 2.3, 0.07]], { pivot: [28, 9.6], sweep: { def: 20 } }),
-    pod([[27, 2.1, 1.1, 1.2, -2.3, 4], [30, 2.2, 1.2, 1.2, -2.2, 3.5], [40, 2.1, 1.1, 1.1, -2.0, 3], [45, 1.95, 1.0, 1.0, -1.9, 2.6]], 3.9, { capF: 'hole' }),
+    pod([[27, 2.1, 1.1, 1.2, -2.3, 4], [30, 2.2, 1.2, 1.2, -2.2, 3.5], [40, 2.1, 1.1, 1.1, -2.0, 3], [45, 1.95, 1.0, 1.0, -1.9, 2.6]], 3.9, { box: true, capF: 'hole', rake: { out: 0.6 } }),
     { t: 'panel', sec: vfin(40, 1.8, 0, 10, 8.2, 48, 3.5, 0, 0.07) },
     surf(trap(46, 4.8, 0.4, 6.5, 6.6, 45, 2.2, 0, 0.06)),
     ...[2.95, 4.95].map(z => noz({ s: 46.0, z, y: -1.9, r: 0.7, len: 1.2, mirror: true })),
@@ -1707,7 +1799,7 @@ A({
   geo: [
     fus([[0, 0.05, 0.05, 0.05, 0, 2], [2.5, 0.85, 0.85, 0.8, 0, 2], [5.5, 1.25, 1.35, 1.15, 0.1, 2.2], [8.5, 1.4, 1.45, 1.3, 0.15, 2.3], [14, 1.45, 1.4, 1.4, 0, 2.5], [22, 1.5, 1.4, 1.4, 0, 2.6], [30, 1.3, 1.4, 1.3, 0.1, 2.5], [37, 1.0, 1.3, 1.0, 0.4, 2.3], [41, 0.6, 0.9, 0.5, 0.7, 2], [42.46, 0.25, 0.35, 0.25, 0.9, 2]], { capF: 'dark', fine: 1 }),
     canopy([[4, 0.05, 0.02, 0.02, 1.2], [5, 0.9, 0.5, 0.05, 1.3], [7.5, 1.1, 0.6, 0.05, 1.45], [9.5, 0.6, 0.3, 0.03, 1.55], [10.2, 0.05, 0.05, 0.02, 1.58]], { mat: 'dark' }),
-    pod([[12, 0.85, 1.35, 1.35, -0.2, 4], [15, 1.0, 1.4, 1.4, -0.2, 3.5], [30, 1.05, 1.3, 1.3, -0.1, 3], [38.5, 0.85, 0.9, 0.9, 0, 2.5]], 1.9, { capF: 'hole' }),
+    pod([[12, 0.85, 1.35, 1.35, -0.2, 4], [15, 1.0, 1.4, 1.4, -0.2, 3.5], [30, 1.05, 1.3, 1.3, -0.1, 3], [38.5, 0.85, 0.9, 0.9, 0, 2.5]], 1.9, { box: true, capF: 'hole', rake: { bot: 0.6 } }),
     surf([[14, 0.9, 2.9, 12.5, 0.05], [19.5, 0.9, 7.4, 7.5, 0.07]]),
     wing('wing', [[20.5, 0.9, 7.4, 6.2, 0.08], [24.05, 0.8, 17.14, 2.2, 0.07]], { pivot: [23.5, 7.4], sweep: { def: 20 } }),
     { t: 'panel', sec: vfin(31, 1.4, 0, 9.5, 7.2, 50, 2.8, 0, 0.07) },
@@ -2317,9 +2409,9 @@ function propDiscs(R, cam, time) {
 
 window.E = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam };
 
-const keys = ["f16","f22","mig21","typhoon","su35","m2000"];
+const keys = ["f15e","su35","f14d","mig31","f22","f35a"];
 const list = E.AIRCRAFT.filter(a => !keys.length || keys.includes(a.key));
-const SIDE = location.hash === '#side', VW = SIDE ? 620 : 420, VH = SIDE ? 200 : 220, cv = document.getElementById('c'), g = cv.getContext('2d');
+const SIDE = location.hash === '#side', VW = SIDE ? 620 : 420, VH = SIDE ? 300 : 220, cv = document.getElementById('c'), g = cv.getContext('2d');
 const PER = SIDE ? 10 : 6;
 window.pages = Math.ceil(list.length / PER);
 window.draw = page => {
@@ -2331,9 +2423,9 @@ window.draw = page => {
     const row = SIDE ? idx >> 1 : idx, ox = SIDE ? (idx & 1) * VW : 0;
     const sc = E.buildScene(ac, { loadout: {}, gear: false, detail: 3 });
     const R = new E.Renderer(VW / 2, VH / 4); R.setScene(sc, ac);
-    (SIDE ? [[Math.PI / 2, 0]] : [[Math.PI / 2, 1.5707], [Math.PI / 2, 0], [0, 0.0001]]).forEach(([yaw, pitch], col) => {
+    (SIDE ? [[+(new URLSearchParams(location.search).get('yaw') ?? 1.5708), +(new URLSearchParams(location.search).get('pitch') ?? 0)]] : [[Math.PI / 2, 1.5707], [Math.PI / 2, 0], [0, 0.0001]]).forEach(([yaw, pitch], col) => {
       const fov = 3, W = VW, H = VH;
-      const dist = (SIDE ? ac.dims.len * 0.56 * H / W * 1.02 : sc.R * 1.08) / Math.tan(fov * Math.PI / 360);
+      const dist = (SIDE ? ac.dims.len * 0.56 * H / W * 1.02 * (+(new URLSearchParams(location.search).get('k') ?? 1)) : sc.R * 1.08) / Math.tan(fov * Math.PI / 360);
       const cam = E.makeCam({ yaw, pitch: Math.min(pitch, 1.5700), dist, W, H, fov });
       R.render(cam, { throttle: 0, time: 0, ground: false, spin: false });
       const img = g.createImageData(W, H);

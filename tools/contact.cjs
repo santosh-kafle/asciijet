@@ -8,7 +8,7 @@ const only = (process.argv[2] || '').split(',').filter(Boolean);
 const html = `<body style="margin:0;background:#fff"><canvas id=c></canvas><script>${eng}
 const keys = ${JSON.stringify(only)};
 const list = E.AIRCRAFT.filter(a => !keys.length || keys.includes(a.key));
-const SIDE = location.hash === '#side', VW = SIDE ? 620 : 420, VH = SIDE ? 200 : 220, cv = document.getElementById('c'), g = cv.getContext('2d');
+const SIDE = location.hash === '#side', VW = SIDE ? 620 : 420, VH = SIDE ? 300 : 220, cv = document.getElementById('c'), g = cv.getContext('2d');
 const PER = SIDE ? 10 : 6;
 window.pages = Math.ceil(list.length / PER);
 window.draw = page => {
@@ -20,9 +20,9 @@ window.draw = page => {
     const row = SIDE ? idx >> 1 : idx, ox = SIDE ? (idx & 1) * VW : 0;
     const sc = E.buildScene(ac, { loadout: {}, gear: false, detail: 3 });
     const R = new E.Renderer(VW / 2, VH / 4); R.setScene(sc, ac);
-    (SIDE ? [[Math.PI / 2, 0]] : [[Math.PI / 2, 1.5707], [Math.PI / 2, 0], [0, 0.0001]]).forEach(([yaw, pitch], col) => {
+    (SIDE ? [[+(new URLSearchParams(location.search).get('yaw') ?? 1.5708), +(new URLSearchParams(location.search).get('pitch') ?? 0)]] : [[Math.PI / 2, 1.5707], [Math.PI / 2, 0], [0, 0.0001]]).forEach(([yaw, pitch], col) => {
       const fov = 3, W = VW, H = VH;
-      const dist = (SIDE ? ac.dims.len * 0.56 * H / W * 1.02 : sc.R * 1.08) / Math.tan(fov * Math.PI / 360);
+      const dist = (SIDE ? ac.dims.len * 0.56 * H / W * 1.02 * (+(new URLSearchParams(location.search).get('k') ?? 1)) : sc.R * 1.08) / Math.tan(fov * Math.PI / 360);
       const cam = E.makeCam({ yaw, pitch: Math.min(pitch, 1.5700), dist, W, H, fov });
       R.render(cam, { throttle: 0, time: 0, ground: false, spin: false });
       const img = g.createImageData(W, H);
@@ -44,7 +44,7 @@ window.draw = page => {
   fs.writeFileSync(path.join(out, 'contact.html'), html);
   const b = await chromium.launch(), p = await b.newPage();
   const errs = []; p.on('pageerror', e => errs.push(e.message));
-  await p.goto('file://' + path.join(out, 'contact.html') + (process.env.SIDE ? '#side' : ''));
+  await p.goto('file://' + path.join(out, 'contact.html') + (process.env.SIDE ? `?yaw=${process.env.YAW ?? 1.5708}&pitch=${process.env.PITCH ?? 0}&k=${process.env.K ?? 1}#side` : ''));
   const n = await p.evaluate(() => window.pages);
   for (let i = 0; i < n; i++) {
     await p.evaluate(i => window.draw(i), i);

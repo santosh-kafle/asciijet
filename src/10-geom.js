@@ -10,12 +10,14 @@ function loft(M, st, o = {}) {
   const seg = Math.round((o.seg || 18) * (M.segMul || 1)), tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
   const rings = [];
   for (const [s, hw, top, bot, yc = 0, n = 2] of st) {
-    const ring = [], e = 2 / n;
+    const ring = [], e = 2 / n, first = !rings.length && o.rake;
     for (let k = 0; k < seg; k++) {
       const a = (k / seg) * Math.PI * 2 + (o.rot || 0), c = Math.cos(a), sn = Math.sin(a);
       const zz = hw * Math.sign(c) * Math.abs(c) ** e;
       const yy = yc + (sn >= 0 ? top : bot) * Math.sign(sn) * Math.abs(sn) ** e;
-      ring.push(M.vert(...tf(x0 - s, yy, z0 + zz)));
+      let ds = 0;
+      if (first) ds = (o.rake.bot || 0) * (1 - sn) / 2 + (o.rake.out || 0) * Math.max(0, c * Math.sign(z0 || 1));
+      ring.push(M.vert(...tf(x0 - s - ds, yy, z0 + zz)));
     }
     rings.push(ring);
   }
@@ -27,7 +29,8 @@ function loft(M, st, o = {}) {
   }
   const cap = (ring, stn, m) => {
     if (stn[1] < 0.02 && stn[2] < 0.02) return;
-    const c = M.vert(...tf(x0 - stn[0], stn[4] || 0, z0));
+    const rk = ring === rings[0] && o.rake ? ((o.rake.bot || 0) + (o.rake.out || 0)) / 2 : 0;
+    const c = M.vert(...tf(x0 - stn[0] - rk, stn[4] || 0, z0));
     for (let k = 0; k < seg; k++) M.tri(c, ring[k], ring[(k + 1) % seg], m, tag);
   };
   M.sub = 15;
@@ -139,3 +142,47 @@ function panelPoint(secs, f, c, side = -1) {
   }
   return [0, 0, 0, 1];
 }
+
+// ---- faceted bodies for stealth shaping
+// Polygon loft through stations { s, pts: [[z, y, ds], ...] full ring, yc }. Flat-shaded by default:
+// every face gets its own vertices, so chines stay sharp. ds shifts a point aft (raked intake lips).
+function ploft(M, st, o = {}) {
+  const tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, zs = o.zs || 1, mat = o.mat || 'skin', tag = o.tag || 0, flat = o.flat !== false;
+  const rings = st.map(({ s, pts, yc = 0 }) => pts.map(([z, y, ds = 0]) => tf(x0 - s - ds, yc + y, z0 + zs * z)));
+  const n = rings[0].length;
+  const shared = flat ? null : rings.map(r => r.map(p => M.vert(...p)));
+  for (let i = 0; i + 1 < rings.length; i++) {
+    if (o.seams) M.sub = Math.floor((st[i].s + st[i + 1].s) / 2 / o.seams);
+    for (let k = 0; k < n; k++) {
+      const k2 = (k + 1) % n;
+      if (flat) {
+        const a = M.vert(...rings[i][k]), b = M.vert(...rings[i][k2]), c = M.vert(...rings[i + 1][k2]), d = M.vert(...rings[i + 1][k]);
+        M.quad(a, b, c, d, mat, tag);
+      } else M.quad(shared[i][k], shared[i][k2], shared[i + 1][k2], shared[i + 1][k], mat, tag);
+    }
+  }
+  M.sub = 15;
+  const cap = (ring, m) => {
+    const c = [0, 1, 2].map(j => ring.reduce((s, p) => s + p[j], 0) / ring.length);
+    const span = Math.max(...ring.map(p => Math.hypot(p[1] - c[1], p[2] - c[2])));
+    if (span < 0.02) return;
+    const ci = M.vert(...c), ids = ring.map(p => M.vert(...p));
+    for (let k = 0; k < n; k++) M.tri(ci, ids[k], ids[(k + 1) % n], m, tag);
+  };
+  cap(rings[0], o.capF || mat);
+  cap(rings[rings.length - 1], o.capB || mat);
+  M.sub = 0;
+}
+
+// Right half (top centre round to bottom centre) -> full ring mirrored about z = 0.
+const mirrorHalf = half => [...half, ...half.slice(1, -1).reverse().map(([z, y, ds]) => [-z, y, ds])];
+// Stealth cross-section: flat top out to tf*w, chine edge at height c, flat bottom out to bf*w.
+const hexa = (w, t, b, c = 0, tf = 0.4, bf = 0.5) => mirrorHalf([[0, t], [w * tf, t * 0.97], [w, c], [w * bf, -b * 0.97], [0, -b]]);
+// Trapezoid intake duct (full ring, centred on its own axis): inner wall width, outer lip leaning,
+// rake = how far aft [top-inner, top-outer, bottom-outer, bottom-inner] sit behind the lip.
+const duct = (wi, wo, h, lean = 0.15, rake = [0, 0, 0, 0]) => {
+  const pts = [[-wi, h / 2, rake[0]], [wo, h / 2, rake[1]], [wo - lean, -h / 2, rake[2]], [-wi, -h / 2, rake[3]]];
+  const out = [];
+  for (let k = 0; k < 4; k++) { const a = pts[k], b = pts[(k + 1) % 4]; out.push(a, a.map((v, j) => lerp(v, b[j], 0.5))); }
+  return out;
+};
