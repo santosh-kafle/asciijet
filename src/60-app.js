@@ -12,6 +12,7 @@ const state = {
   ac: null, loadIdx: 0, load: {}, custom: false,
   thr: 0, thrTarget: 0, bays: false,
   labels: store.get('labels', true), ground: store.get('ground', true), spin: true,
+  gear: store.get('gear', true), detail: store.get('detail', 2),
   sweep: null, fuel: 1, tab: 'loadout', cat: 'All', q: '', sort: 'cat', cmp: store.get('cmp', []), hl: 0, hover: 0,
 };
 const cam = { yaw: 2.3, pitch: 0.32, zoom: 1, tyaw: 2.3, tpitch: 0.32, tzoom: 1, drag: false, idle: 0, ext: 0 };
@@ -27,7 +28,7 @@ function milPos(ac = state.ac) { return hasAB(ac) ? MIL : 1; }
 // ---- scene
 function rebuild() {
   const ac = state.ac;
-  scene = buildScene(ac, { loadout: state.load, bays: state.bays, sweep: state.sweep });
+  scene = buildScene(ac, { loadout: state.load, bays: state.bays, sweep: state.sweep, gear: state.gear, detail: state.detail });
   R.setScene(scene, ac);
   makeLabels();
 }
@@ -49,7 +50,8 @@ function setLoadout(i) {
   state.loadIdx = (i + n) % n; state.load = { ...ac.loadouts[state.loadIdx].set }; state.custom = false; state.hl = 0;
   fitFuel();
   if (!state.bays && hasBayStores()) state.bays = false;
-  rebuild(); renderDossier(); syncButtons();
+  rebuild(); renderDossier(); syncButtons(); audio.click();
+  if (sheet.open) renderSheet();
 }
 // Presets load as much fuel as the maximum take-off weight allows (heavy bombers top up in the air).
 function fitFuel() {
@@ -65,8 +67,9 @@ function hasBayStores() { return (state.ac.stations || []).some(s => s.kind === 
 // ---- sizing
 function resize() {
   const r = $('#stage').getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
-  const target = r.width < 600 ? 110 : r.width < 1100 ? 170 : 230;
-  const fs = clamp(Math.round(r.width / target / 0.6), 7, 13);
+  // columns across the viewer for Low / Medium / High / Ultra, scaled to the screen width
+  const base = [120, 170, 230, 330][state.detail], target = r.width < 600 ? base * 0.5 : r.width < 1100 ? base * 0.75 : base;
+  const fs = clamp(Math.round(r.width / target / 0.6), 5, 20);
   ctx.font = `600 ${fs}px ${FONT}`;
   const cw = ctx.measureText('M').width || fs * 0.6, ch = cw * 2;
   canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
@@ -86,7 +89,7 @@ function freeRect() {
 }
 
 // ---- frame
-let tPrev = performance.now(), tNow = 0, uiTick = 0, intro = 0;
+let tPrev = performance.now(), tNow = 0, uiTick = 0, audioTick = 0, intro = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   if (document.hidden) return;
@@ -120,9 +123,15 @@ function frame(t) {
   const ox = ((fr.x + fr.w / 2) - geom.w / 2) / geom.cw * SX, oy = ((fr.y + fr.h / 2) - geom.h / 2) / geom.ch * SY;
   const c = makeCam({ yaw: cam.yaw, pitch: cam.pitch, dist, target: [-(cam.ext || 0) / 2, 0, 0], W: cols * SX, H: rows * SY, fov, ox, oy });
   lastCam = c;
-  const gearH = Math.max(1.1, state.ac.dims.height * 0.28);
-  R.render(c, { throttle: state.thr, time: tNow, ground: state.ground, groundY: scene.minY - gearH, groundR: scene.R * 2.6, groundStep: scene.R > 18 ? 5 : 2, spin: state.thr > 0.03 });
-  draw();
+  if ((audioTick += dt) > 0.033) {
+    audioTick = 0;
+    const e = state.ac.eng, rear = clamp(-Math.cos(cam.yaw) * Math.cos(cam.pitch) * 0.5 + 0.5, 0, 1);
+    audio.update({ thr: state.thr, mil, ab: hasAB(), n: e.n, big: state.ac.cat === 'Bomber', rear, zoom: cam.zoom,
+      type: e.type === 'turboprop' ? 'turboprop' : (e.bypass || 0) >= 0.7 && !e.wet ? 'fan' : 'jet' });
+  }
+  if (sheet.open) { drawSheet(dt); return; }
+  R.render(c, { throttle: state.thr, time: tNow, ground: state.ground, groundY: scene.groundY, groundR: scene.R * 2.6, groundStep: scene.R > 18 ? 5 : 2, spin: state.thr > 0.03 });
+  drawGrid(ctx, R, geom, state.hl || state.hover);
   placeLabels(c);
   if ((uiTick += dt) > 0.1) { uiTick = 0; liveReadouts(); }
 }
@@ -130,13 +139,13 @@ function frame(t) {
 // Glyphs are batched by colour so each fillStyle is set once per frame.
 const bucketCount = new Uint32Array(4097), bucketStart = new Uint32Array(4097);
 let order = new Uint32Array(0);
-function draw() {
+function drawGrid(ctx, R, geom, hl) {
   const { cw, ch, dpr } = geom, cols = R.cols, rows = R.rows, n = cols * rows;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#0a0d10'; ctx.fillRect(0, 0, geom.w, geom.h);
   ctx.font = `600 ${geom.fs}px ${FONT}`; ctx.textBaseline = 'middle';
   if (order.length < n) order = new Uint32Array(n);
-  const keyOf = new Uint16Array(n), C = R.col, chars = R.chars, tags = R.cellTag, hl = state.hl || state.hover;
+  const keyOf = new Uint16Array(n), C = R.col, chars = R.chars, tags = R.cellTag;
   bucketCount.fill(0);
   for (let i = 0; i < n; i++) {
     if (chars[i] === 32) { keyOf[i] = 4096; continue; }
@@ -261,9 +270,11 @@ function initControls() {
 
   $('#thr').addEventListener('input', e => { state.thrTarget = e.target.value / 1000; intro = 0; });
   $('#abBtn').onclick = toggleAB;
-  $('#baysBtn').onclick = () => { state.bays = !state.bays; rebuild(); syncButtons(); };
+  $('#baysBtn').onclick = () => { state.bays = !state.bays; rebuild(); syncButtons(); audio.bay(state.bays); };
   $('#labBtn').onclick = () => { state.labels = !state.labels; store.set('labels', state.labels); syncButtons(); };
   $('#grdBtn').onclick = () => { state.ground = !state.ground; store.set('ground', state.ground); syncButtons(); };
+  $('#gearBtn').onclick = () => { state.gear = !state.gear; store.set('gear', state.gear); rebuild(); syncButtons(); audio.bay(state.gear); };
+  $('#detBtn').onclick = () => { state.detail = (state.detail + 1) % 4; store.set('detail', state.detail); resize(); rebuild(); syncButtons(); };
   $('#spinBtn').onclick = () => { state.spin = !state.spin; syncButtons(); };
   $$('[data-view]').forEach(b => b.onclick = () => setView(b.dataset.view));
   $('#sweep').addEventListener('input', e => {
@@ -274,6 +285,9 @@ function initControls() {
   $('#helpBtn').onclick = () => { $('#help').hidden = false; };
   $('#helpClose').onclick = () => { $('#help').hidden = true; };
   $('#cmpAdd').onclick = addCompare;
+  $('#sndBtn').onclick = () => { audio.toggle(!audio.on); store.set('sound', audio.on); syncButtons(); };
+  const wake = () => { if (audio.on) audio.start(); };
+  addEventListener('pointerdown', wake); addEventListener('keydown', wake);
   $('#cmpClose').onclick = () => { $('#cmp').hidden = true; };
   $('#cmp').addEventListener('click', e => { if (e.target.id === 'cmp') $('#cmp').hidden = true; });
   $('#help').addEventListener('click', e => { if (e.target.id === 'help') $('#help').hidden = true; });
@@ -281,7 +295,7 @@ function initControls() {
   addEventListener('keydown', e => {
     if (e.target.matches('input[type=search], select')) { if (e.key === 'Escape') e.target.blur(); return; }
     const k = e.key;
-    if (k === 'Escape') { $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); state.hl = 0; return; }
+    if (k === 'Escape') { closeSheet(); $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); state.hl = 0; return; }
     if (k === '/') { e.preventDefault(); $('#index').classList.add('open'); $('#q').focus(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = k.toLowerCase();
@@ -291,7 +305,11 @@ function initControls() {
     else if (key === 'b') $('#baysBtn').click();
     else if (key === 'l') $('#labBtn').click();
     else if (key === 'g') $('#grdBtn').click();
+    else if (key === 'u') $('#gearBtn').click();
+    else if (key === 'd') $('#detBtn').click();
     else if (key === 'c') addCompare();
+    else if (key === 'o') sheet.open ? closeSheet() : openSheet();
+    else if (key === 'm') $('#sndBtn').click();
     else if (k === ' ') { e.preventDefault(); $('#spinBtn').click(); }
     else if (k >= '1' && k <= '6') setView(['q', 'front', 'side', 'top', 'below', 'rear'][+k - 1]);
     else if (k === '[') setLoadout(state.loadIdx - 1);
@@ -322,7 +340,11 @@ function syncButtons() {
   $('#baysBtn').classList.toggle('on', state.bays);
   $('#labBtn').classList.toggle('on', state.labels);
   $('#grdBtn').classList.toggle('on', state.ground);
+  $('#gearBtn').classList.toggle('on', state.gear);
+  $('#detBtn').innerHTML = 'Detail: ' + ['Low', 'Medium', 'High', 'Ultra'][state.detail] + ' <kbd>D</kbd>';
   $('#spinBtn').classList.toggle('on', state.spin);
+  $('#sndBtn').classList.toggle('on', audio.on);
+  $('#sndBtn').innerHTML = (audio.on ? 'Sound on' : 'Sound off') + ' <kbd>M</kbd>';
   const ab = hasAB();
   $('#abBtn').innerHTML = (ab ? 'Burner' : 'Full power') + ' <kbd>A</kbd>';
   $('#abBtn').classList.toggle('on', ab ? state.thrTarget > MIL : state.thrTarget > 0.5);

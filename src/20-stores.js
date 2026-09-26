@@ -104,7 +104,7 @@ function fins(M, xRoot, chordR, chordT, rIn, rOut, sweep, mat, tf, tag, roll = M
   for (let k = 0; k < n; k++) {
     const a = roll + (k / n) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
     const sec = (r, ch, off) => ({ le: [xRoot - off, ca * r, sa * r], te: [xRoot - off - ch, ca * r, sa * r], t });
-    panel(M, [sec(rIn, chordR, 0), sec(rOut, chordT, (rOut - rIn) * Math.tan(sweep * D2R))], { mat, tf, tag });
+    panel(M, [sec(rIn, chordR, 0), sec(rOut, chordT, (rOut - rIn) * Math.tan(sweep * D2R))], { mat, tf, tag, solid: true });
   }
 }
 
@@ -168,7 +168,7 @@ function storeMesh(M, st, tf, tag) {
       const k = [[-L * 0.85, h, 0], [-L * 0.85, -h * 0.2, w], [-L * 0.85, -h * 0.2, -w]];
       for (const [x, y, z] of k) {
         const up = z === 0, dz = up ? 0 : Math.sign(z) * sp * 0.7, dy = up ? sp * 0.6 : -sp * 0.2;
-        panel(M, [{ le: [x, y, z], te: [x - L * 0.12, y, z], t: 0.07 }, { le: [x - L * 0.05, y + dy, z + dz], te: [x - L * 0.13, y + dy, z + dz], t: 0.07 }], { mat, tf, tag });
+        panel(M, [{ le: [x, y, z], te: [x - L * 0.12, y, z], t: 0.07 }, { le: [x - L * 0.05, y + dy, z + dz], te: [x - L * 0.13, y + dy, z + dz], t: 0.07 }], { mat, tf, tag, solid: true });
       }
       break;
     }

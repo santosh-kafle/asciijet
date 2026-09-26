@@ -90,6 +90,7 @@ function paneLoadout(ac) {
   const scale = Math.max(ac.wt.mtow, p.gross) * 1.04, pc = x => (x / scale * 100).toFixed(2) + '%';
   const segs = [['Empty', ac.wt.empty, '#4f7f93'], ['Crew', p.crew, '#8fcbe0'], ['Internal fuel', ac.wt.fuel * state.fuel, '#7fd49a'], ['Tank fuel', p.extFuel, '#3e8f5a'], ['Stores', p.stores, '#ffb04a']];
   return `
+  <button class="btn sheetlink" id="sheetLink">Open loadout sheet: every station and weapon in detail <kbd>O</kbd></button>
   <div class="sec"><h3>Loadout presets <em>[ ] to cycle</em></h3><div class="presets">${presets}${state.custom ? '<button class="preset on"><b>Custom</b><span>Edited station by station below.</span></button>' : ''}</div></div>
   <div class="sec"><h3>Weight and balance <em>${fmt(p.gross)} kg of ${fmt(ac.wt.mtow)} kg max</em></h3>
     <div class="bar">${segs.map(s => `<i style="width:${pc(s[1])};background:${s[2]}"></i>`).join('')}<span class="mark" style="left:${pc(ac.wt.mtow)}" title="Maximum take-off weight"></span></div>
@@ -191,6 +192,9 @@ function paneSpecs(ac) {
     ${row('Thrust / weight', fmt(twRef(ac), 2) + ' at half fuel, clean')}
     ${row('Wing loading', fmt((w.empty + w.fuel * 0.5) / d.wingArea) + ' kg/m² at half fuel')}
   </table></div>
+  <div class="sec"><h3>Systems</h3><table>
+    ${[['Radar', ac.radar], ['Sensors', ac.sensors], ['Electronic warfare', ac.ew]].filter(r => r[1]).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
+  </table></div>
   <div class="sec"><h3>Armament</h3><table>
     ${row('Gun', ac.gun || 'None')}
     ${row('Hardpoints', ac.hard || '')}
@@ -211,17 +215,22 @@ function paneAbout(ac) {
     <tr><th>Entered service</th><td class="num">${ac.intro}</td></tr>
     <tr><th>Number built</th><td class="num">${ac.built}</td></tr>
     <tr><th>Status</th><td>${ac.status}</td></tr>
+    ${ac.cost ? `<tr><th>Unit cost</th><td>${ac.cost}</td></tr>` : ''}
   </table></div>
+  ${ac.operators ? `<div class="sec"><h3>Operators</h3><p class="prose" style="font-size:14px">${ac.operators}</p></div>` : ''}
+  ${ac.combat ? `<div class="sec"><h3>Combat record</h3><p class="prose" style="font-size:14px">${ac.combat}</p></div>` : ''}
+  ${ac.variants ? `<div class="sec"><h3>Variants</h3><p class="prose" style="font-size:14px">${ac.variants}</p></div>` : ''}
   <div class="sec"><h3>Weapons shown in this atlas</h3><table>${STORE_CATS.filter(c => byCat[c]).map(c => `<tr><th>${c}</th><td>${byCat[c].join(', ')}</td></tr>`).join('')}</table></div>
   ${ac.est?.length ? `<p class="note">${ESTX} marks open-source estimates where no official figure is published.</p>` : ''}`;
 }
 
 function bindPane() {
   $$('#pane [data-lo]').forEach(b => b.onclick = () => setLoadout(+b.dataset.lo));
+  const sl = $('#sheetLink'); if (sl) sl.onclick = () => openSheet();
   $$('#pane select[data-st]').forEach(s => s.onchange = () => {
     const v = s.value;
     if (v) { const [k, n] = v.split('|'); state.load[s.dataset.st] = [k, +n]; } else delete state.load[s.dataset.st];
-    state.custom = true; fitFuel(); rebuild(); renderStrip(); renderPane();
+    state.custom = true; fitFuel(); rebuild(); renderStrip(); renderPane(); audio.click();
   });
   const fu = $('#fuel');
   if (fu) {
@@ -297,7 +306,8 @@ async function start() {
   R.match = shapeMatcher(FONT);
   $('#q').addEventListener('input', e => { state.q = e.target.value; renderIndex(); });
   $('#sort').addEventListener('change', e => { state.sort = e.target.value; renderIndex(); });
-  initControls();
+  initControls(); initSheet();
+  audio.on = store.get('sound', false);  // starts on the first click or key press
   resize();
   const key = (location.hash || '').slice(1);
   selectAircraft(AIRCRAFT.some(a => a.key === key) ? key : 'f22', false);
@@ -307,4 +317,3 @@ async function start() {
   state.thrTarget = 1; intro = 3;
   requestAnimationFrame(frame);
 }
-start();

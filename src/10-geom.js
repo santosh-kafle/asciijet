@@ -7,7 +7,7 @@ const ID_TF = (x, y, z) => [x, y, z];
 // Loft through stations [s, halfWidth, top, bottom, yCentre, n]. n = superellipse exponent:
 // 2 ellipse, >2 boxy, <2 diamond (stealth chines). x = x0 - s.
 function loft(M, st, o = {}) {
-  const seg = o.seg || 18, tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
+  const seg = Math.round((o.seg || 18) * (M.segMul || 1)), tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
   const rings = [];
   for (const [s, hw, top, bot, yc = 0, n = 2] of st) {
     const ring = [], e = 2 / n;
@@ -22,6 +22,7 @@ function loft(M, st, o = {}) {
   for (let i = 0; i + 1 < rings.length; i++) {
     const A = rings[i], B = rings[i + 1];
     const m = o.mats ? o.mats[i] || mat : mat;
+    if (o.seams) M.sub = Math.floor((st[i][0] + st[i + 1][0]) / 2 / o.seams);   // fuselage panel seams
     for (let k = 0; k < seg; k++) M.quad(A[k], A[(k + 1) % seg], B[(k + 1) % seg], B[k], m, tag);
   }
   const cap = (ring, stn, m) => {
@@ -29,6 +30,7 @@ function loft(M, st, o = {}) {
     const c = M.vert(...tf(x0 - stn[0], stn[4] || 0, z0));
     for (let k = 0; k < seg; k++) M.tri(c, ring[k], ring[(k + 1) % seg], m, tag);
   };
+  M.sub = 15;
   cap(rings[0], st[0], o.capF || mat);
   cap(rings[rings.length - 1], st[st.length - 1], o.capB || mat);
 }
@@ -77,8 +79,14 @@ function panel(M, secs, o = {}) {
     rings.push(ring);
   }
   const R = rings[0].length;
+  const uAt = k => k < K ? AF_U[K - 1 - k] : AF_U[k - K + 1];   // chord position of ring point k
   for (let i = 0; i + 1 < n; i++)
-    for (let k = 0; k < R; k++) M.quad(rings[i][k], rings[i][(k + 1) % R], rings[i + 1][(k + 1) % R], rings[i + 1][k], mat, tag);
+    for (let k = 0; k < R; k++) {
+      const u = (uAt(k) + uAt((k + 1) % R)) / 2;
+      M.sub = u > 0.7 && !o.solid ? 1 + i * 2 + (k % 2 ? 0 : 0) : 0;
+      M.quad(rings[i][k], rings[i][(k + 1) % R], rings[i + 1][(k + 1) % R], rings[i + 1][k], mat, tag);
+    }
+  M.sub = 0;
   for (const ring of [rings[0], rings[n - 1]])
     for (let k = 1; k + 1 < R; k++) M.tri(ring[0], ring[k], ring[k + 1], mat, tag);
 }
@@ -111,14 +119,14 @@ function propeller(M, p, L, zs = 1) {
         const bx = x - ds, by = y + ca * rr, bz = z + sa * rr, w = j ? 0.18 : 0.3;
         return { le: [bx + w, by, bz], te: [bx - w, by, bz], t: 0.12 };
       });
-      panel(M, secs, { mat: 'prop', tag: 0xffff });
+      panel(M, secs, { mat: 'prop', tag: 0xffff, solid: true });
     }
   });
   return { x: x - 0.9, y, z, r, contra: !!p.contra, blades: p.blades };
 }
 
 // Point on a panel's lower surface at span fraction f and chord fraction c (for hardpoints).
-function panelPoint(secs, f, c) {
+function panelPoint(secs, f, c, side = -1) {
   const z0 = secs[0].le[2], z1 = secs[secs.length - 1].le[2], zt = lerp(z0, z1, f);
   for (let i = 0; i + 1 < secs.length; i++) {
     const A = secs[i], B = secs[i + 1];
@@ -126,7 +134,7 @@ function panelPoint(secs, f, c) {
       const u = clamp((zt - A.le[2]) / ((B.le[2] - A.le[2]) || 1), 0, 1);
       const le = [0, 1, 2].map(k => lerp(A.le[k], B.le[k], u)), te = [0, 1, 2].map(k => lerp(A.te[k], B.te[k], u));
       const ch = Math.hypot(te[0] - le[0], te[2] - le[2]), t = lerp(A.t, B.t, u);
-      return [lerp(le[0], te[0], c), lerp(le[1], te[1], c) - afT(c) * t * ch, lerp(le[2], te[2], c), ch];
+      return [lerp(le[0], te[0], c), lerp(le[1], te[1], c) + side * afT(c) * t * ch, lerp(le[2], te[2], c), ch];
     }
   }
   return [0, 0, 0, 1];

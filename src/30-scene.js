@@ -55,7 +55,8 @@ function arrange(n, S, st) {
 }
 
 function buildScene(ac, o = {}) {
-  const L = ac.dims.len, M = new Mesh(), exhausts = [], props = [];
+  const L = ac.dims.len, M = new Mesh(), exhausts = [], props = [], panels = [];
+  M.segMul = [0.75, 1, 1.35, 1.7][o.detail ?? 1];
   const sweep = o.sweep ?? ac.sweep?.def;
   const secsByName = {};
   const bays = o.bays ?? false;
@@ -64,6 +65,7 @@ function buildScene(ac, o = {}) {
   // Airframe
   for (const p of ac.geo) {
     for (const zs of p.mirror ? [1, -1] : [1]) {
+      M.part();
       if (p.t === 'loft') {
         let st = p.st;
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
@@ -74,16 +76,25 @@ function buildScene(ac, o = {}) {
           }
           st = out;
         }
-        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf });
+        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
         let secs = panelSections(p, L, sweep);
         if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
         if (p.name && zs > 0) secsByName[p.name] = secs;
         panel(M, secs, { mat: p.mat });
+        panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
     }
   }
+
+  // Floor height from the published height: the tallest point of the airframe (fin tip) stands
+  // dims.height above the ground.
+  let maxY = -Infinity;
+  for (let i = 1; i < M.v.length; i += 3) maxY = Math.max(maxY, M.v[i]);
+  let groundY = maxY - ac.dims.height;
+
+  markings(M, ac, panels);
 
   // Stations and stores
   const inst = stationInstances(ac, secsByName), labels = [];
@@ -122,6 +133,7 @@ function buildScene(ac, o = {}) {
     for (const [dx, dy, dz, roll] of offs) {
       const cx = ax + dx, yy = ay + dy, zz = az + (st.kind === 'rail' ? Math.sign(az) * (S.d / 2 + 0.02) : 0) + dz;
       const cr = Math.cos(roll), sr = Math.sin(roll);
+      M.part();
       storeMesh(M, S, (x, y, z) => [cx + S.L / 2 + x, yy + y * cr - z * sr, zz + y * sr + z * cr], tag);
       cy += yy;
     }
@@ -130,16 +142,22 @@ function buildScene(ac, o = {}) {
 
   // Cut open bays: drop airframe skin triangles in the bay footprint below the ceiling.
   if (cut.length) {
-    const V = M.v, T = M.t, keep = { t: [], m: [], g: [] };
+    const V = M.v, T = M.t, keep = { t: [], m: [], g: [], p: [] };
     for (let i = 0; i < M.m.length; i++) {
       const a = T[i * 3] * 3, b = T[i * 3 + 1] * 3, c = T[i * 3 + 2] * 3;
       const x = (V[a] + V[b] + V[c]) / 3, y = (V[a + 1] + V[b + 1] + V[c + 1]) / 3, z = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
       const skin = M.g[i] === 0 && (M.m[i] === MAT_ID.skin || M.m[i] === MAT_ID.skin2 || M.m[i] === MAT_ID.dark);
       if (skin && cut.some(k => x > k.x0 && x < k.x1 && Math.abs(z - k.z) < k.w && y < k.y + 0.05)) continue;
-      keep.t.push(T[i * 3], T[i * 3 + 1], T[i * 3 + 2]); keep.m.push(M.m[i]); keep.g.push(M.g[i]);
+      keep.t.push(T[i * 3], T[i * 3 + 1], T[i * 3 + 2]); keep.m.push(M.m[i]); keep.g.push(M.g[i]); keep.p.push(M.p[i]);
     }
-    M.t = keep.t; M.m = keep.m; M.g = keep.g;
+    M.t = keep.t; M.m = keep.m; M.g = keep.g; M.p = keep.p;
   }
+
+  // Keep everything above the floor (deep racks on bombers), then lower the gear to it.
+  let lowY = Infinity;
+  for (let i = 1; i < M.v.length; i += 3) lowY = Math.min(lowY, M.v[i]);
+  groundY = Math.min(groundY, lowY - 0.12);
+  if (o.gear !== false) landingGear(M, ac, groundY);
 
   const mesh = M.finish();
   let R = 0, minY = 0;
@@ -147,11 +165,11 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY };
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {
-  panel(M, [{ le: [x + ch / 2, y + 0.05, z], te: [x - ch / 2, y + 0.05, z], t: 0.1 }, { le: [x + ch / 2 - 0.1, y - h, z], te: [x - ch / 2 + 0.05, y - h, z], t: 0.1 }].map(s => ({ ...s, le: [s.le[0], s.le[1], s.le[2]], te: [s.te[0], s.te[1], s.te[2]] })), { mat: 'skin2', tag });
+  panel(M, [{ le: [x + ch / 2, y + 0.05, z], te: [x - ch / 2, y + 0.05, z], t: 0.1 }, { le: [x + ch / 2 - 0.1, y - h, z], te: [x - ch / 2 + 0.05, y - h, z], t: 0.1 }].map(s => ({ ...s, le: [s.le[0], s.le[1], s.le[2]], te: [s.te[0], s.te[1], s.te[2]] })), { mat: 'skin2', tag, solid: true });
 }
 
 // ---- weights and engine model
@@ -203,4 +221,113 @@ function perfAt(ac, thr, load, fuelFrac = 1) {
     tw: Ttot * 1000 / (gross * 9.80665), twMax: (e.wet || e.dry) * e.n * 1000 / (gross * 9.80665),
     wl: gross / ac.dims.wingArea, endurance: fuel / Math.max(flow, 1e-6) / 60, power,
   };
+}
+
+// ---- national markings: roundels on the wings, stars on the fins
+
+const INSIGNIA = {
+  us: { wing: [['star', 1, 'insig']], where: 'us' },
+  usColor: { wing: [['disc', 1, 'blue'], ['star', 0.9, 'white']], where: 'us' },
+  ru: { wing: [['star', 1, 'white'], ['star', 0.78, 'red']], fin: true },
+  cn: { wing: [['star', 1, 'yellow'], ['star', 0.78, 'red']], fin: true },
+  fr: { wing: [['disc', 1, 'blue'], ['disc', 0.66, 'white'], ['disc', 0.33, 'red']] },
+  uk: { wing: [['disc', 1, 'blue'], ['disc', 0.45, 'red']] },
+  se: { wing: [['disc', 1, 'blue'], ['disc', 0.5, 'yellow']] },
+};
+function insigniaFor(ac) {
+  if (ac.insignia) return INSIGNIA[ac.insignia];
+  const c = ac.country;
+  if (/Soviet|Russia/.test(c)) return INSIGNIA.ru;
+  if (/China/.test(c)) return INSIGNIA.cn;
+  if (/France/.test(c)) return INSIGNIA.fr;
+  if (/UK|United Kingdom/.test(c)) return INSIGNIA.uk;
+  if (/Sweden/.test(c)) return INSIGNIA.se;
+  return INSIGNIA.us;
+}
+
+// Flat layered disc or five-point star lying on a surface (centre c, unit normal n).
+function decal(M, c, n, r, layers) {
+  let a = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const nm = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
+  const e1 = nm(cr(n, a)), e2 = nm(cr(n, e1));
+  M.part();
+  layers.forEach(([shape, f, mat], li) => {
+    const off = 0.015 * (li + 1), rr = r * f, pts = [];
+    const N = shape === 'star' ? 10 : 18;
+    for (let k = 0; k < N; k++) {
+      const ang = (k / N) * Math.PI * 2 + Math.PI / 2, rad = shape === 'star' ? (k % 2 ? rr * 0.4 : rr) : rr;
+      const u = Math.cos(ang) * rad, v = Math.sin(ang) * rad;
+      pts.push(M.vert(c[0] + e1[0] * u + e2[0] * v + n[0] * off, c[1] + e1[1] * u + e2[1] * v + n[1] * off, c[2] + e1[2] * u + e2[2] * v + n[2] * off));
+    }
+    const ctr = M.vert(c[0] + n[0] * off, c[1] + n[1] * off, c[2] + n[2] * off);
+    for (let k = 0; k < N; k++) M.tri(ctr, pts[k], pts[(k + 1) % N], mat);
+  });
+}
+
+function markings(M, ac, panels) {
+  const ins = insigniaFor(ac);
+  if (!ins) return;
+  const wingP = panels.filter(q => q.p.name === 'wing');
+  for (const { secs, zs } of wingP) {
+    const A = secs[0], B = secs[secs.length - 1];
+    const f = ac.cat === 'Bomber' ? 0.62 : 0.66;
+    for (const side of [1, -1]) {
+      // US practice: star on the upper left and lower right wing only
+      if (ins.where === 'us' && !((side > 0 && zs < 0) || (side < 0 && zs > 0))) continue;
+      const pt = panelPoint(secs, f, 0.45, side);
+      const chord = [B.te[0] - B.le[0], 0, B.te[2] - B.le[2]], span = [B.le[0] - A.le[0], B.le[1] - A.le[1], B.le[2] - A.le[2]];
+      let n = [chord[1] * span[2] - chord[2] * span[1], chord[2] * span[0] - chord[0] * span[2], chord[0] * span[1] - chord[1] * span[0]];
+      const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
+      if (Math.sign(n[1]) !== side) n = n.map(x => -x);
+      decal(M, [pt[0], pt[1], pt[2]], n, clamp(pt[3] * 0.3, 0.35, 2.4), ins.wing);
+    }
+  }
+  if (!ins.fin) return;
+  for (const { secs } of panels) {
+    const A = secs[0], B = secs[secs.length - 1];
+    const dy = B.le[1] - A.le[1], dz = B.le[2] - A.le[2];
+    if (Math.abs(dy) < Math.abs(dz) * 1.5 || dy < 0.8) continue;   // fins only
+    const f = 0.5, le = [0, 1, 2].map(k => lerp(A.le[k], B.le[k], f)), te = [0, 1, 2].map(k => lerp(A.te[k], B.te[k], f));
+    const c = [0, 1, 2].map(k => lerp(le[k], te[k], 0.45)), ch = Math.hypot(te[0] - le[0], te[2] - le[2]);
+    const d = [dz, 0, 0], span = [0, dy, dz];
+    let n = [0, -dz, dy]; const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
+    const t = afT(0.45) * lerp(A.t, B.t, f) * ch;
+    for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), clamp(ch * 0.26, 0.3, 1.6), ins.wing);
+  }
+}
+
+// ---- landing gear: struts and wheels down to the floor
+
+function fuselageBottom(ac, s) {
+  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
+  const st = f.st;
+  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
+    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
+    return lerp((st[i][4] || 0) - st[i][3], (st[i + 1][4] || 0) - st[i + 1][3], u);
+  }
+  return -0.5;
+}
+
+function landingGear(M, ac, groundY) {
+  const L = ac.dims.len, big = ac.cat === 'Bomber';
+  const legs = ac.gear || [
+    { s: 0.19 * L, z: 0, r: big ? 0.5 : 0.28, n: big ? 2 : 1 },
+    { s: 0.6 * L, z: clamp(ac.dims.span * 0.13, 1.1, 3.6), r: big ? 0.62 : 0.38, n: big ? 4 : 1, mirror: true },
+  ];
+  for (const g of legs) for (const zs of g.mirror ? [1, -1] : [1]) {
+    const x = L / 2 - g.s, z = g.z * zs, r = g.r, w = r * 0.62;
+    const top = g.y ?? fuselageBottom(ac, g.s) + 0.15, hub = groundY + r;
+    M.part();
+    const sr = Math.max(0.06, r * 0.22);
+    loft(M, [[0, sr, sr, sr], [top - hub, sr * 0.8, sr * 0.8, sr * 0.8]], { seg: 8, mat: 'strut', tf: (a, b, c) => [x + b, top + a, z + c] });
+    const wheels = g.n === 4 ? [[r * 1.15, -1], [r * 1.15, 1], [-r * 1.15, -1], [-r * 1.15, 1]] : g.n === 2 ? [[0, -1], [0, 1]] : [[0, 0]];
+    if (g.n === 4) loft(M, [[0, 0.08, 0.08, 0.08], [r * 2.6, 0.08, 0.08, 0.08]], { seg: 6, mat: 'strut', x0: x + r * 1.3, tf: (a, b, c) => [a, hub + b, z + c] });
+    for (const [dx, dzs] of wheels) {
+      const cx = x + dx, cz = z + dzs * (w / 2 + sr + 0.03);
+      M.part();
+      loft(M, [[0, r * 0.55, r * 0.55, r * 0.55], [0.03, r * 0.95, r * 0.95, r * 0.95], [w * 0.5, r, r, r], [w - 0.03, r * 0.95, r * 0.95, r * 0.95], [w, r * 0.55, r * 0.55, r * 0.55]],
+        { seg: 14, mat: 'tire', capF: 'strut', capB: 'strut', tf: (a, b, c) => [cx + c, hub + b, cz - a - w / 2] });
+    }
+  }
 }

@@ -2,6 +2,7 @@
   <button class="btn" id="menuBtn" aria-controls="index" aria-expanded="false">Aircraft</button>
   <div class="brand"><h1>Jet<span>/</span>Atlas</h1><small>fighters and bombers in ASCII</small></div>
   <div class="topr">
+    <button class="btn" id="sndBtn" title="Engine sound">Sound off <kbd>M</kbd></button>
     <button class="btn" id="cmpAdd" title="Add this aircraft to the comparison">+ Compare</button>
     <button class="btn" id="helpBtn" title="Controls">? Keys</button>
   </div>
@@ -30,8 +31,11 @@
     <span class="sep"></span>
     <button class="btn hot" id="abBtn">Burner <kbd>A</kbd></button>
     <button class="btn" id="baysBtn">Bays <kbd>B</kbd></button>
+    <button class="btn" id="sheetBtn">Loadout sheet <kbd>O</kbd></button>
     <button class="btn" id="labBtn">Labels <kbd>L</kbd></button>
     <button class="btn" id="grdBtn">Floor <kbd>G</kbd></button>
+    <button class="btn" id="gearBtn">Gear <kbd>U</kbd></button>
+    <button class="btn" id="detBtn">Detail: High <kbd>D</kbd></button>
     <button class="btn" id="spinBtn">Orbit <kbd>Space</kbd></button>
     <label id="sweepBox" hidden>Wing sweep <input id="sweep" type="range" min="0" max="100" value="0" aria-label="Wing sweep"><span id="sweepVal" class="num"></span></label>
   </div>
@@ -73,6 +77,18 @@
 
 <div id="cmp" hidden><div class="box" role="dialog" aria-label="Comparison"><h2>Compare <button class="btn" id="cmpClose">Close <kbd>Esc</kbd></button></h2><div id="cmpBody" style="overflow-x:auto"></div></div></div>
 
+<div id="sheet" hidden><div class="sbox" role="dialog" aria-label="Loadout sheet">
+  <header class="shead"><h2 id="sheetTitle"></h2><button class="btn" id="sheetClose">Close <kbd>Esc</kbd></button></header>
+  <div class="ssum" id="sheetSum"></div>
+  <section><h3 class="sh">Stores loading chart <em>left wingtip to right wingtip · click a station</em></h3><div class="chartwrap"><div id="chart"></div></div></section>
+  <div class="sgrid">
+    <div class="viewer"><canvas id="sheetView" aria-label="Rotating ASCII model of the selected weapon"></canvas><span class="vlabel">ASCII model, rotating</span></div>
+    <div id="storeCard"></div>
+  </div>
+  <section><h3 class="sh">By category</h3><div id="sheetCats"></div></section>
+  <section><h3 class="sh">Cleared for this aircraft <em>every store in its presets</em></h3><div class="chips" id="sheetCleared"></div></section>
+</div></div>
+
 <div id="help" hidden><div class="box" role="dialog" aria-label="Controls"><h2>Controls</h2>
   <table>
     <tr><td>drag</td><td>orbit the camera</td></tr>
@@ -82,11 +98,15 @@
     <tr><td>A</td><td>afterburner on / off (idle)</td></tr>
     <tr><td>1 - 6</td><td>3/4, front, side, top, below, rear</td></tr>
     <tr><td>B / L / G</td><td>weapon bays, store labels, floor</td></tr>
+    <tr><td>U</td><td>landing gear up / down</td></tr>
+    <tr><td>D</td><td>detail: low, medium, high, ultra</td></tr>
     <tr><td>Space</td><td>orbit on / off</td></tr>
     <tr><td>[ / ]</td><td>previous / next loadout</td></tr>
     <tr><td>&larr; / &rarr;</td><td>previous / next aircraft</td></tr>
     <tr><td>/</td><td>search</td></tr>
     <tr><td>C</td><td>add to compare</td></tr>
+    <tr><td>O</td><td>loadout sheet: every station and weapon in detail</td></tr>
+    <tr><td>M</td><td>engine sound on / off</td></tr>
   </table>
   <p class="note" style="margin-top:12px">Shapes are simplified from published dimensions; figures are public data for the variant named. Values marked <span class="est">EST</span> are open-source estimates. Thrust and fuel flow are sea-level static; fuel flow uses typical specific fuel consumption for the engine type.</p>
   <p style="margin:14px 0 0"><button class="btn" id="helpClose">Close <kbd>Esc</kbd></button></p>

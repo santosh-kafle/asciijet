@@ -17,7 +17,7 @@ class Renderer {
     this.z = new Float32Array(n); this.lum = new Float32Array(n); this.spec = new Float32Array(n);
     this.cr = new Float32Array(n); this.cg = new Float32Array(n); this.cb = new Float32Array(n);
     this.er = new Float32Array(n); this.eg = new Float32Array(n); this.eb = new Float32Array(n);
-    this.tag = new Uint16Array(n);
+    this.tag = new Uint16Array(n); this.pt = new Uint16Array(n);
     const c = cols * rows;
     this.chars = new Uint8Array(c); this.col = new Uint8Array(c * 3); this.cellTag = new Uint16Array(c);
     this.gr = new Float32Array(c); this.gg = new Float32Array(c); this.gb = new Float32Array(c); this.tmp = new Float32Array(c);
@@ -47,6 +47,7 @@ class Renderer {
     this.px = new Float32Array(nv); this.py = new Float32Array(nv); this.pz = new Float32Array(nv);
     this.dp = new Float32Array(nv); this.dm = new Float32Array(nv); this.sp = new Float32Array(nv); this.sm = new Float32Array(nv);
     this.matCol = MAT_KEYS.map(k => k === 'skin' || k === 'door' ? this.paint : k === 'skin2' ? this.paint2 : MATS[k].c);
+    this.triCol = paintScheme(m, FN, ac, this.matCol);
     this.matSp = MAT_KEYS.map(k => MATS[k].sp);
     this.shadow = buildShadow(m);
   }
@@ -54,7 +55,7 @@ class Renderer {
   // cam: {eye, f, r, u, foc, cx, cy}; o: {throttle, time, ground, spin}
   render(cam, o) {
     const { W, H } = this, n = W * H, m = this.scene.mesh;
-    this.z.fill(Infinity); this.lum.fill(0); this.spec.fill(0); this.tag.fill(0);
+    this.z.fill(Infinity); this.lum.fill(0); this.spec.fill(0); this.tag.fill(0); this.pt.fill(0);
     this.cr.fill(0); this.cg.fill(0); this.cb.fill(0); this.er.fill(0); this.eg.fill(0); this.eb.fill(0);
     const { eye, f, r, u, foc, cx, cy } = cam;
 
@@ -82,7 +83,7 @@ class Renderer {
       sp[i] = h > 0 ? h ** 24 : 0; sm[i] = h < 0 ? (-h) ** 24 : 0;
     }
 
-    const T = m.T, M = m.M, G = m.G, FN = this.FN, VS = this.VS, Z = this.z, LU = this.lum, SP = this.spec, TG = this.tag;
+    const T = m.T, M = m.M, G = m.G, P = m.P, FN = this.FN, VS = this.VS, Z = this.z, LU = this.lum, SP = this.spec, TG = this.tag, PT = this.pt, TC = this.triCol;
     const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
     const glowMat = MAT_ID.burner, heat = burnerColor(this.ac, o.throttle);
     const spinning = o.spin;
@@ -101,7 +102,7 @@ class Renderer {
       const sf = FN[t * 3] * vx + FN[t * 3 + 1] * vy + FN[t * 3 + 2] * vz < 0 ? 1 : -1;
       const la = VS[t * 3] * sf > 0 ? dp[a] : dm[a], lb = VS[t * 3 + 1] * sf > 0 ? dp[b] : dm[b], lc = VS[t * 3 + 2] * sf > 0 ? dp[c] : dm[c];
       const sa = VS[t * 3] * sf > 0 ? sp[a] : sm[a], sb = VS[t * 3 + 1] * sf > 0 ? sp[b] : sm[b], sc = VS[t * 3 + 2] * sf > 0 ? sp[c] : sm[c];
-      const mi = M[t], col = this.matCol[mi], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t];
+      const mi = M[t], cr0 = TC[t * 3], cg0 = TC[t * 3 + 1], cb0 = TC[t * 3 + 2], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t], pid = P[t];
       const ia = 1 / area;
       for (let y = y0; y <= y1; y++) {
         const sy = y + 0.5;
@@ -113,27 +114,33 @@ class Renderer {
           if (w0 < 0 || w1 < 0 || w2 < 0) continue;
           const zz = w0 * pz[a] + w1 * pz[b] + w2 * pz[c], k = y * W + x;
           if (zz >= Z[k]) continue;
-          Z[k] = zz; TG[k] = tg;
+          Z[k] = zz; TG[k] = tg; PT[k] = pid;
           if (glow) {
             LU[k] = heat[3]; SP[k] = 0; CR[k] = heat[0]; CG[k] = heat[1]; CB[k] = heat[2];
             ER[k] = heat[0] * heat[3]; EG[k] = heat[1] * heat[3]; EB[k] = heat[2] * heat[3];
           } else {
             LU[k] = w0 * la + w1 * lb + w2 * lc; SP[k] = (w0 * sa + w1 * sb + w2 * sc) * ms;
-            CR[k] = col[0]; CG[k] = col[1]; CB[k] = col[2];
+            CR[k] = cr0; CG[k] = cg0; CB[k] = cb0;
             ER[k] = 0; EG[k] = 0; EB[k] = 0;
           }
         }
       }
     }
 
-    // Ink lines where depth jumps (a wing edge over the fuselage), so shapes separate.
+    // Ink lines: strong where depth jumps (a wing edge over the fuselage), medium where two parts
+    // meet (canopy, intakes, fins), light for hinge lines and panel seams inside one part.
     for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++) {
       const k = y * W + x, z0 = Z[k];
       if (z0 === Infinity) continue;
       for (let qq = 0; qq < 2; qq++) {
         const q = qq ? k + W : k + 1, z1 = Z[q];
         if (z1 === Infinity) continue;
-        if (Math.abs(z1 - z0) > 0.25 + 0.012 * z0) { const far = z1 > z0 ? q : k; LU[far] *= 0.3; SP[far] *= 0.3; }
+        const far = z1 > z0 ? q : k;
+        if (Math.abs(z1 - z0) > 0.25 + 0.012 * z0) { LU[far] *= 0.3; SP[far] *= 0.3; }
+        else if (PT[q] !== PT[k]) {
+          const f = (PT[q] >> 4) !== (PT[k] >> 4) ? 0.5 : 0.7;
+          LU[far] *= f; SP[far] *= f;
+        }
       }
     }
 
@@ -266,19 +273,21 @@ function buildShadow(m) {
 function ground(R, cam, o) {
   const { W, H, z: Z } = R, { eye, f, r, u, foc, cx, cy } = cam, gy = o.groundY, sh = R.shadow;
   const lights = o.floorLights || [];
+  // The camera's right vector is level (r[1] = 0), so the ray's height and its hit distance are
+  // constant along a screen row: work them out once per row.
   for (let y = 0; y < H; y++) {
     const vy = -(y + 0.5 - cy) / foc;
+    const dy = f[1] + u[1] * vy;
+    if (dy >= -1e-4) continue;
+    const t = (gy - eye[1]) / dy, pw = t / foc * 1.2;
+    const bx = eye[0] + (f[0] + u[0] * vy) * t, bz = eye[2] + (f[2] + u[2] * vy) * t;
     for (let x = 0; x < W; x++) {
       const k = y * W + x;
       if (Z[k] !== Infinity) continue;
       const vx = (x + 0.5 - cx) / foc;
-      const dx = f[0] + r[0] * vx + u[0] * vy, dy = f[1] + r[1] * vx + u[1] * vy, dz = f[2] + r[2] * vx + u[2] * vy;
-      if (dy >= -1e-4) continue;
-      const t = (gy - eye[1]) / dy;
-      const gx = eye[0] + dx * t, gz = eye[2] + dz * t;
+      const gx = bx + r[0] * vx * t, gz = bz + r[2] * vx * t;
       const dist = Math.hypot(gx, gz), fade = 1 - smooth(o.groundR * 0.5, o.groundR, dist);
       if (fade <= 0) continue;
-      const pw = t / foc * 1.2;                         // sample footprint on the ground
       const st = o.groundStep || 2, ST = st * 5;
       const lx = Math.abs(gx - Math.round(gx / st) * st), lz = Math.abs(gz - Math.round(gz / st) * st);
       const Lx = Math.abs(gx - Math.round(gx / ST) * ST), Lz = Math.abs(gz - Math.round(gz / ST) * ST);
@@ -289,7 +298,7 @@ function ground(R, cam, o) {
       const shade = sxx >= 0 && szz >= 0 && sxx < sh.w && szz < sh.h && sh.a[szz * sh.w + sxx];
       if (shade) v = 0;
       let er = 0, eg = 0, eb = 0;
-      for (const L of lights) {
+      if (lights.length) for (const L of lights) {
         const d2 = (gx - L.x) ** 2 + (gz - L.z) ** 2, w = L.i / (1 + d2 / (L.r * L.r));
         er += w * L.c[0]; eg += w * L.c[1]; eb += w * L.c[2];
       }
@@ -304,4 +313,37 @@ function ground(R, cam, o) {
       }
     }
   }
+}
+
+// ---- paint schemes: camouflage from 3D value noise, lighter undersides, per triangle
+
+function vnoise(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), xf = x - xi, yf = y - yi, zf = z - zi;
+  const h = (a, b, c) => hash(a * 157 + b * 113 + c * 311);
+  const s = t => t * t * (3 - 2 * t), u = s(xf), v = s(yf), w = s(zf);
+  const l = (a, b, t) => a + (b - a) * t;
+  return l(l(l(h(xi, yi, zi), h(xi + 1, yi, zi), u), l(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), u), v),
+           l(l(h(xi, yi, zi + 1), h(xi + 1, yi, zi + 1), u), l(h(xi, yi + 1, zi + 1), h(xi + 1, yi + 1, zi + 1), u), v), w);
+}
+
+function paintScheme(m, FN, ac, matCol) {
+  const out = new Float32Array(m.nt * 3), cam = ac.camo || {};
+  const cols = (cam.cols || []).map(hex2rgb), under = cam.under ? hex2rgb(cam.under) : matCol[MAT_ID.skin].map(c => Math.min(1, c * 1.12 + 0.03));
+  const top = cam.top ? hex2rgb(cam.top) : null, f = cam.f || 0.22, skinIds = [MAT_ID.skin, MAT_ID.door];
+  for (let t = 0; t < m.nt; t++) {
+    let c = matCol[m.M[t]];
+    if (skinIds.includes(m.M[t]) && m.G[t] === 0) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 3; k++) { const v = m.T[t * 3 + k] * 3; cx += m.V[v]; cy += m.V[v + 1]; cz += m.V[v + 2]; }
+      cx /= 3; cy /= 3; cz /= 3;
+      const ny = FN[t * 3 + 1], down = ny < -0.35;
+      if (down && cam.wrap !== true) c = under;
+      else if (cols.length) {
+        const nz = vnoise(cx * f + 11, cy * f * 0.6 + 3, cz * f + 7);
+        c = cols[Math.floor(clamp((nz - 0.28) / 0.44, 0, 0.999) * cols.length)];
+      } else if (top && ny > 0.35) c = top;
+    }
+    out[t * 3] = c[0]; out[t * 3 + 1] = c[1]; out[t * 3 + 2] = c[2];
+  }
+  return out;
 }

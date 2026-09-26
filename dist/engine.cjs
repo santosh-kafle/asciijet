@@ -31,17 +31,29 @@ const MATS = {
   prop:    { c: [0.30, 0.30, 0.32], sp: 0.40, sh: 16 },
   door:    { c: [0.50, 0.54, 0.58], sp: 0.25, sh: 14 },   // open bay doors (skin tone set per aircraft)
   bay:     { c: [0.18, 0.19, 0.20], sp: 0.10, sh: 8 },
+  // national markings and landing gear
+  red:     { c: [0.80, 0.14, 0.12], sp: 0.30, sh: 12 },
+  blue:    { c: [0.16, 0.30, 0.62], sp: 0.30, sh: 12 },
+  yellow:  { c: [0.92, 0.76, 0.16], sp: 0.30, sh: 12 },
+  green:   { c: [0.15, 0.52, 0.25], sp: 0.30, sh: 12 },
+  black:   { c: [0.08, 0.08, 0.09], sp: 0.20, sh: 12 },
+  insig:   { c: [0.33, 0.36, 0.39], sp: 0.20, sh: 12 },   // low-visibility grey insignia
+  tire:    { c: [0.10, 0.10, 0.11], sp: 0.15, sh: 8 },
+  strut:   { c: [0.72, 0.73, 0.74], sp: 0.90, sh: 30 },
 };
 const MAT_KEYS = Object.keys(MATS);
 const MAT_ID = Object.fromEntries(MAT_KEYS.map((k, i) => [k, i]));
 
 const hex2rgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; };
 
-// Mesh builder: vertices, triangles, per-triangle material and tag (0 airframe, k+1 store station k).
+// Mesh builder: vertices, triangles, per-triangle material, tag (0 airframe, k+1 store station k)
+// and part id. Part ids draw the ink lines: component (high bits) outlines where parts meet,
+// sub-part (low 4 bits) for hinge lines and panel seams inside one component.
 class Mesh {
-  constructor() { this.v = []; this.t = []; this.m = []; this.g = []; }
+  constructor() { this.v = []; this.t = []; this.m = []; this.g = []; this.p = []; this.comp = 1; this.sub = 0; this.segMul = 1; }
+  part() { this.comp++; this.sub = 0; return this; }
   vert(x, y, z) { this.v.push(x, y, z); return this.v.length / 3 - 1; }
-  tri(a, b, c, mat, tag = 0) { this.t.push(a, b, c); this.m.push(MAT_ID[mat] ?? 0); this.g.push(tag); }
+  tri(a, b, c, mat, tag = 0) { this.t.push(a, b, c); this.m.push(MAT_ID[mat] ?? 0); this.g.push(tag); this.p.push((this.comp << 4) | (this.sub & 15)); }
   quad(a, b, c, d, mat, tag) { this.tri(a, b, c, mat, tag); this.tri(a, c, d, mat, tag); }
   append(o) {
     const base = this.v.length / 3;
@@ -49,6 +61,7 @@ class Mesh {
     for (const i of o.t) this.t.push(i + base);
     for (const x of o.m) this.m.push(x);
     for (const x of o.g) this.g.push(x);
+    for (const x of o.p) this.p.push(x);
   }
   // Freeze into typed arrays and compute smooth vertex normals.
   finish() {
@@ -69,7 +82,7 @@ class Mesh {
       const l = Math.hypot(N[i], N[i + 1], N[i + 2]) || 1;
       N[i] /= l; N[i + 1] /= l; N[i + 2] /= l;
     }
-    return { V, N, T, M: new Uint8Array(this.m), G: new Uint16Array(this.g), nv: V.length / 3, nt: T.length / 3 };
+    return { V, N, T, M: new Uint8Array(this.m), G: new Uint16Array(this.g), P: new Uint16Array(this.p), nv: V.length / 3, nt: T.length / 3 };
   }
 }
 
@@ -83,7 +96,7 @@ const ID_TF = (x, y, z) => [x, y, z];
 // Loft through stations [s, halfWidth, top, bottom, yCentre, n]. n = superellipse exponent:
 // 2 ellipse, >2 boxy, <2 diamond (stealth chines). x = x0 - s.
 function loft(M, st, o = {}) {
-  const seg = o.seg || 18, tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
+  const seg = Math.round((o.seg || 18) * (M.segMul || 1)), tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
   const rings = [];
   for (const [s, hw, top, bot, yc = 0, n = 2] of st) {
     const ring = [], e = 2 / n;
@@ -98,6 +111,7 @@ function loft(M, st, o = {}) {
   for (let i = 0; i + 1 < rings.length; i++) {
     const A = rings[i], B = rings[i + 1];
     const m = o.mats ? o.mats[i] || mat : mat;
+    if (o.seams) M.sub = Math.floor((st[i][0] + st[i + 1][0]) / 2 / o.seams);   // fuselage panel seams
     for (let k = 0; k < seg; k++) M.quad(A[k], A[(k + 1) % seg], B[(k + 1) % seg], B[k], m, tag);
   }
   const cap = (ring, stn, m) => {
@@ -105,6 +119,7 @@ function loft(M, st, o = {}) {
     const c = M.vert(...tf(x0 - stn[0], stn[4] || 0, z0));
     for (let k = 0; k < seg; k++) M.tri(c, ring[k], ring[(k + 1) % seg], m, tag);
   };
+  M.sub = 15;
   cap(rings[0], st[0], o.capF || mat);
   cap(rings[rings.length - 1], st[st.length - 1], o.capB || mat);
 }
@@ -153,8 +168,14 @@ function panel(M, secs, o = {}) {
     rings.push(ring);
   }
   const R = rings[0].length;
+  const uAt = k => k < K ? AF_U[K - 1 - k] : AF_U[k - K + 1];   // chord position of ring point k
   for (let i = 0; i + 1 < n; i++)
-    for (let k = 0; k < R; k++) M.quad(rings[i][k], rings[i][(k + 1) % R], rings[i + 1][(k + 1) % R], rings[i + 1][k], mat, tag);
+    for (let k = 0; k < R; k++) {
+      const u = (uAt(k) + uAt((k + 1) % R)) / 2;
+      M.sub = u > 0.7 && !o.solid ? 1 + i * 2 + (k % 2 ? 0 : 0) : 0;
+      M.quad(rings[i][k], rings[i][(k + 1) % R], rings[i + 1][(k + 1) % R], rings[i + 1][k], mat, tag);
+    }
+  M.sub = 0;
   for (const ring of [rings[0], rings[n - 1]])
     for (let k = 1; k + 1 < R; k++) M.tri(ring[0], ring[k], ring[k + 1], mat, tag);
 }
@@ -187,14 +208,14 @@ function propeller(M, p, L, zs = 1) {
         const bx = x - ds, by = y + ca * rr, bz = z + sa * rr, w = j ? 0.18 : 0.3;
         return { le: [bx + w, by, bz], te: [bx - w, by, bz], t: 0.12 };
       });
-      panel(M, secs, { mat: 'prop', tag: 0xffff });
+      panel(M, secs, { mat: 'prop', tag: 0xffff, solid: true });
     }
   });
   return { x: x - 0.9, y, z, r, contra: !!p.contra, blades: p.blades };
 }
 
 // Point on a panel's lower surface at span fraction f and chord fraction c (for hardpoints).
-function panelPoint(secs, f, c) {
+function panelPoint(secs, f, c, side = -1) {
   const z0 = secs[0].le[2], z1 = secs[secs.length - 1].le[2], zt = lerp(z0, z1, f);
   for (let i = 0; i + 1 < secs.length; i++) {
     const A = secs[i], B = secs[i + 1];
@@ -202,7 +223,7 @@ function panelPoint(secs, f, c) {
       const u = clamp((zt - A.le[2]) / ((B.le[2] - A.le[2]) || 1), 0, 1);
       const le = [0, 1, 2].map(k => lerp(A.le[k], B.le[k], u)), te = [0, 1, 2].map(k => lerp(A.te[k], B.te[k], u));
       const ch = Math.hypot(te[0] - le[0], te[2] - le[2]), t = lerp(A.t, B.t, u);
-      return [lerp(le[0], te[0], c), lerp(le[1], te[1], c) - afT(c) * t * ch, lerp(le[2], te[2], c), ch];
+      return [lerp(le[0], te[0], c), lerp(le[1], te[1], c) + side * afT(c) * t * ch, lerp(le[2], te[2], c), ch];
     }
   }
   return [0, 0, 0, 1];
@@ -315,7 +336,7 @@ function fins(M, xRoot, chordR, chordT, rIn, rOut, sweep, mat, tf, tag, roll = M
   for (let k = 0; k < n; k++) {
     const a = roll + (k / n) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
     const sec = (r, ch, off) => ({ le: [xRoot - off, ca * r, sa * r], te: [xRoot - off - ch, ca * r, sa * r], t });
-    panel(M, [sec(rIn, chordR, 0), sec(rOut, chordT, (rOut - rIn) * Math.tan(sweep * D2R))], { mat, tf, tag });
+    panel(M, [sec(rIn, chordR, 0), sec(rOut, chordT, (rOut - rIn) * Math.tan(sweep * D2R))], { mat, tf, tag, solid: true });
   }
 }
 
@@ -379,7 +400,7 @@ function storeMesh(M, st, tf, tag) {
       const k = [[-L * 0.85, h, 0], [-L * 0.85, -h * 0.2, w], [-L * 0.85, -h * 0.2, -w]];
       for (const [x, y, z] of k) {
         const up = z === 0, dz = up ? 0 : Math.sign(z) * sp * 0.7, dy = up ? sp * 0.6 : -sp * 0.2;
-        panel(M, [{ le: [x, y, z], te: [x - L * 0.12, y, z], t: 0.07 }, { le: [x - L * 0.05, y + dy, z + dz], te: [x - L * 0.13, y + dy, z + dz], t: 0.07 }], { mat, tf, tag });
+        panel(M, [{ le: [x, y, z], te: [x - L * 0.12, y, z], t: 0.07 }, { le: [x - L * 0.05, y + dy, z + dz], te: [x - L * 0.13, y + dy, z + dz], t: 0.07 }], { mat, tf, tag, solid: true });
       }
       break;
     }
@@ -392,6 +413,72 @@ function storeMesh(M, st, tf, tag) {
     }
   }
 }
+
+// ---- 22-store-extra.js
+// Extra weapon data for the loadout sheet: [top speed, warhead, propulsion, maker, in service].
+// Blank means not published. "est." marks open-source estimates.
+const STORE_X = {
+  'AIM-120C': ['Mach 4', '22 kg blast-fragmentation', 'Solid rocket', 'Raytheon', 1991],
+  'AIM-120D': ['Mach 4', '22 kg blast-fragmentation', 'Solid rocket', 'Raytheon', 2015],
+  'AIM-9X': ['Mach 2.5+', '9.4 kg annular blast-fragmentation', 'Solid rocket', 'Raytheon', 2003],
+  'AIM-9M': ['Mach 2.5', '9.4 kg annular blast-fragmentation', 'Solid rocket', 'Raytheon', 1982],
+  'AIM-7M': ['Mach 4', '39 kg blast-fragmentation', 'Solid rocket', 'Raytheon', 1982],
+  'AIM-54C': ['Mach 5', '60 kg blast-fragmentation', 'Solid rocket', 'Hughes', 1986],
+  'R-77': ['Mach 4', '22 kg rod', 'Solid rocket', 'Vympel', 2015],
+  'R-73': ['Mach 2.5', '7.4 kg rod', 'Solid rocket', 'Vympel', 1984],
+  'R-27ER': ['Mach 4.5', '39 kg rod', 'Solid rocket (extended)', 'Vympel', 1990],
+  'R-60M': ['Mach 2.7', '3.5 kg rod', 'Solid rocket', 'Vympel', 1982],
+  'R-13M': ['Mach 2.5', '11 kg blast-fragmentation (est.)', 'Solid rocket', 'Vympel', 1974],
+  'R-33': ['Mach 4.5', '47 kg blast-fragmentation', 'Solid rocket', 'Vympel', 1981],
+  'R-37M': ['Mach 6 (claimed)', '60 kg blast-fragmentation (est.)', 'Dual-pulse solid rocket', 'Vympel', 2014],
+  'Meteor': ['Mach 4+', 'Blast-fragmentation (not published)', 'Throttleable ducted rocket (ramjet)', 'MBDA', 2016],
+  'MICA': ['Mach 4', '12 kg blast-fragmentation', 'Solid rocket, thrust vectoring', 'MBDA', 1996],
+  'IRIS-T': ['Mach 3', '11.4 kg high-explosive fragmentation', 'Solid rocket, thrust vectoring', 'Diehl Defence', 2005],
+  'Magic 2': ['Mach 2.7', '12.7 kg blast-fragmentation', 'Solid rocket', 'Matra', 1986],
+  'PL-15': ['Mach 4+ (est.)', 'Blast-fragmentation (not published)', 'Dual-pulse solid rocket', 'LETRI', 2016],
+  'PL-10': ['Mach 3 (est.)', 'Blast-fragmentation (not published)', 'Solid rocket, thrust vectoring', 'LETRI', 2015],
+  'Super 530D': ['Mach 4.6', '30 kg blast-fragmentation', 'Solid rocket', 'Matra', 1988],
+  'Mk 82': ['Free fall', '87 kg Tritonal', 'None', 'US ordnance plants', 1954],
+  'Mk 84': ['Free fall', '429 kg Tritonal', 'None', 'US ordnance plants', 1954],
+  'GBU-12': ['Glide', '87 kg Tritonal (Mk 82 body)', 'None', 'Raytheon / Lockheed Martin', 1976],
+  'GBU-10': ['Glide', '429 kg Tritonal (Mk 84 body)', 'None', 'Raytheon / Lockheed Martin', 1976],
+  'GBU-38': ['Glide', '87 kg Tritonal (Mk 82 body)', 'None', 'Boeing', 2005],
+  'GBU-32': ['Glide', '202 kg Tritonal (Mk 83 body)', 'None', 'Boeing', 1999],
+  'GBU-31': ['Glide', '429 kg Tritonal (Mk 84 body)', 'None', 'Boeing', 1998],
+  'GBU-39': ['Glide, pop-out wings', '17 kg AFX-757', 'None', 'Boeing', 2006],
+  'Rack SDB': ['Glide, pop-out wings', '4 × 17 kg AFX-757', 'None', 'Boeing', 2006],
+  'GBU-57': ['Free fall', '2,400 kg AFX-757 / PBXN-114', 'None', 'Boeing', 2011],
+  'CBU-97': ['Free fall', '10 BLU-108 submunitions, 40 anti-armour skeets', 'None', 'Textron', 1997],
+  'B61': ['Free fall', 'Nuclear, variable yield 0.3 to 50 kt', 'None', 'Sandia / Boeing (tail kit)', 2022],
+  'B83': ['Free fall, parachute', 'Nuclear, up to 1.2 Mt', 'None', 'Lawrence Livermore / Sandia', 1983],
+  'Paveway IV': ['Glide', 'Insensitive high explosive, 500 lb class', 'None', 'Raytheon UK', 2008],
+  'AASM': ['Rocket-boosted glide', '250 kg class bomb body', 'Solid rocket booster', 'Safran', 2008],
+  '1000 lb MC': ['Free fall', 'About 220 kg high explosive (est.)', 'None', 'UK Royal Ordnance', 1950],
+  'FAB-500': ['Free fall', '201 kg TNT', 'None', 'Soviet ordnance plants', 1962],
+  'FAB-250': ['Free fall', '99 kg TNT (est.)', 'None', 'Soviet ordnance plants', 1962],
+  'KAB-500L': ['Glide', '450 kg penetrating body (est.)', 'None', 'Region', 1975],
+  'AGM-88': ['Mach 2+', '66 kg blast-fragmentation', 'Solid rocket', 'Northrop Grumman', 2012],
+  'AGM-65': ['About 1,150 km/h', '136 kg penetrating blast', 'Solid rocket', 'Raytheon', 1989],
+  'AGM-84': ['864 km/h (Mach 0.71)', '221 kg penetration blast', 'Turbojet', 'Boeing', 1977],
+  'AGM-158': ['Mach 0.8 (est.)', '450 kg WDU-42 penetrator', 'Turbojet (ER: turbofan)', 'Lockheed Martin', 2009],
+  'AGM-86B': ['Mach 0.73', 'W80 nuclear, 5 to 150 kt', 'Turbofan', 'Boeing', 1982],
+  'Storm Shadow': ['Mach 0.8', '450 kg BROACH tandem penetrator', 'Turbojet', 'MBDA', 2002],
+  'Taurus': ['Mach 0.8', '480 kg MEPHISTO tandem penetrator', 'Turbofan', 'Taurus Systems', 2005],
+  'ASMP-A': ['Mach 3', 'TNA nuclear, 300 kt', 'Ramjet', 'MBDA', 2009],
+  'Brimstone': ['Mach 1.3', '3 × 6.3 kg tandem shaped charge', 'Solid rocket', 'MBDA', 2005],
+  'RBS 15F': ['Mach 0.9', '200 kg high explosive', 'Turbojet', 'Saab', 1989],
+  'Kh-31P': ['Mach 3.5', '87 kg high-explosive fragmentation', 'Integral rocket-ramjet', 'Zvezda / Tactical Missiles', 1988],
+  'Kh-59MK2': ['Mach 0.8 (est.)', '320 kg (est.)', 'Turbofan', 'Raduga', 2019],
+  'Kh-55': ['Mach 0.77', 'Nuclear, 200 kt', 'Turbofan (pop-out engine)', 'Raduga', 1983],
+  'Kh-101': ['Mach 0.78 (est.)', '400 kg high explosive (est.)', 'Turbofan', 'Raduga', 2012],
+  'Kh-22': ['Mach 4.6', '1,000 kg high explosive or 350 kt nuclear', 'Liquid-fuel rocket', 'Raduga', 1967],
+  'Kh-47M2': ['Mach 10 (claimed)', '480 kg (est.) or nuclear', 'Solid rocket (Iskander-derived)', 'KBM', 2017],
+  'Kh-15': ['Mach 5', 'Nuclear, 300 kt', 'Solid rocket', 'Raduga', 1988],
+  'Blue Steel': ['Mach 3', 'Red Snow nuclear, 1.1 Mt', 'Two-chamber liquid rocket', 'Avro', 1963],
+  'YJ-12': ['Mach 3+ (est.)', '205 kg (est.)', 'Ramjet', 'CASIC', 2015],
+};
+for (const [k, [spd, wh, prop, maker, year]] of Object.entries(STORE_X))
+  if (STORES[k]) Object.assign(STORES[k], { spd, wh, prop, maker, year });
 
 // ---- 30-scene.js
 // Scene assembly: airframe parts + stations + stores -> one mesh, exhaust sources and label anchors.
@@ -451,7 +538,8 @@ function arrange(n, S, st) {
 }
 
 function buildScene(ac, o = {}) {
-  const L = ac.dims.len, M = new Mesh(), exhausts = [], props = [];
+  const L = ac.dims.len, M = new Mesh(), exhausts = [], props = [], panels = [];
+  M.segMul = [0.75, 1, 1.35, 1.7][o.detail ?? 1];
   const sweep = o.sweep ?? ac.sweep?.def;
   const secsByName = {};
   const bays = o.bays ?? false;
@@ -460,6 +548,7 @@ function buildScene(ac, o = {}) {
   // Airframe
   for (const p of ac.geo) {
     for (const zs of p.mirror ? [1, -1] : [1]) {
+      M.part();
       if (p.t === 'loft') {
         let st = p.st;
         if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
@@ -470,16 +559,25 @@ function buildScene(ac, o = {}) {
           }
           st = out;
         }
-        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf });
+        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
         let secs = panelSections(p, L, sweep);
         if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
         if (p.name && zs > 0) secsByName[p.name] = secs;
         panel(M, secs, { mat: p.mat });
+        panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
     }
   }
+
+  // Floor height from the published height: the tallest point of the airframe (fin tip) stands
+  // dims.height above the ground.
+  let maxY = -Infinity;
+  for (let i = 1; i < M.v.length; i += 3) maxY = Math.max(maxY, M.v[i]);
+  let groundY = maxY - ac.dims.height;
+
+  markings(M, ac, panels);
 
   // Stations and stores
   const inst = stationInstances(ac, secsByName), labels = [];
@@ -518,6 +616,7 @@ function buildScene(ac, o = {}) {
     for (const [dx, dy, dz, roll] of offs) {
       const cx = ax + dx, yy = ay + dy, zz = az + (st.kind === 'rail' ? Math.sign(az) * (S.d / 2 + 0.02) : 0) + dz;
       const cr = Math.cos(roll), sr = Math.sin(roll);
+      M.part();
       storeMesh(M, S, (x, y, z) => [cx + S.L / 2 + x, yy + y * cr - z * sr, zz + y * sr + z * cr], tag);
       cy += yy;
     }
@@ -526,16 +625,22 @@ function buildScene(ac, o = {}) {
 
   // Cut open bays: drop airframe skin triangles in the bay footprint below the ceiling.
   if (cut.length) {
-    const V = M.v, T = M.t, keep = { t: [], m: [], g: [] };
+    const V = M.v, T = M.t, keep = { t: [], m: [], g: [], p: [] };
     for (let i = 0; i < M.m.length; i++) {
       const a = T[i * 3] * 3, b = T[i * 3 + 1] * 3, c = T[i * 3 + 2] * 3;
       const x = (V[a] + V[b] + V[c]) / 3, y = (V[a + 1] + V[b + 1] + V[c + 1]) / 3, z = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
       const skin = M.g[i] === 0 && (M.m[i] === MAT_ID.skin || M.m[i] === MAT_ID.skin2 || M.m[i] === MAT_ID.dark);
       if (skin && cut.some(k => x > k.x0 && x < k.x1 && Math.abs(z - k.z) < k.w && y < k.y + 0.05)) continue;
-      keep.t.push(T[i * 3], T[i * 3 + 1], T[i * 3 + 2]); keep.m.push(M.m[i]); keep.g.push(M.g[i]);
+      keep.t.push(T[i * 3], T[i * 3 + 1], T[i * 3 + 2]); keep.m.push(M.m[i]); keep.g.push(M.g[i]); keep.p.push(M.p[i]);
     }
-    M.t = keep.t; M.m = keep.m; M.g = keep.g;
+    M.t = keep.t; M.m = keep.m; M.g = keep.g; M.p = keep.p;
   }
+
+  // Keep everything above the floor (deep racks on bombers), then lower the gear to it.
+  let lowY = Infinity;
+  for (let i = 1; i < M.v.length; i += 3) lowY = Math.min(lowY, M.v[i]);
+  groundY = Math.min(groundY, lowY - 0.12);
+  if (o.gear !== false) landingGear(M, ac, groundY);
 
   const mesh = M.finish();
   let R = 0, minY = 0;
@@ -543,11 +648,11 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY };
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {
-  panel(M, [{ le: [x + ch / 2, y + 0.05, z], te: [x - ch / 2, y + 0.05, z], t: 0.1 }, { le: [x + ch / 2 - 0.1, y - h, z], te: [x - ch / 2 + 0.05, y - h, z], t: 0.1 }].map(s => ({ ...s, le: [s.le[0], s.le[1], s.le[2]], te: [s.te[0], s.te[1], s.te[2]] })), { mat: 'skin2', tag });
+  panel(M, [{ le: [x + ch / 2, y + 0.05, z], te: [x - ch / 2, y + 0.05, z], t: 0.1 }, { le: [x + ch / 2 - 0.1, y - h, z], te: [x - ch / 2 + 0.05, y - h, z], t: 0.1 }].map(s => ({ ...s, le: [s.le[0], s.le[1], s.le[2]], te: [s.te[0], s.te[1], s.te[2]] })), { mat: 'skin2', tag, solid: true });
 }
 
 // ---- weights and engine model
@@ -599,6 +704,115 @@ function perfAt(ac, thr, load, fuelFrac = 1) {
     tw: Ttot * 1000 / (gross * 9.80665), twMax: (e.wet || e.dry) * e.n * 1000 / (gross * 9.80665),
     wl: gross / ac.dims.wingArea, endurance: fuel / Math.max(flow, 1e-6) / 60, power,
   };
+}
+
+// ---- national markings: roundels on the wings, stars on the fins
+
+const INSIGNIA = {
+  us: { wing: [['star', 1, 'insig']], where: 'us' },
+  usColor: { wing: [['disc', 1, 'blue'], ['star', 0.9, 'white']], where: 'us' },
+  ru: { wing: [['star', 1, 'white'], ['star', 0.78, 'red']], fin: true },
+  cn: { wing: [['star', 1, 'yellow'], ['star', 0.78, 'red']], fin: true },
+  fr: { wing: [['disc', 1, 'blue'], ['disc', 0.66, 'white'], ['disc', 0.33, 'red']] },
+  uk: { wing: [['disc', 1, 'blue'], ['disc', 0.45, 'red']] },
+  se: { wing: [['disc', 1, 'blue'], ['disc', 0.5, 'yellow']] },
+};
+function insigniaFor(ac) {
+  if (ac.insignia) return INSIGNIA[ac.insignia];
+  const c = ac.country;
+  if (/Soviet|Russia/.test(c)) return INSIGNIA.ru;
+  if (/China/.test(c)) return INSIGNIA.cn;
+  if (/France/.test(c)) return INSIGNIA.fr;
+  if (/UK|United Kingdom/.test(c)) return INSIGNIA.uk;
+  if (/Sweden/.test(c)) return INSIGNIA.se;
+  return INSIGNIA.us;
+}
+
+// Flat layered disc or five-point star lying on a surface (centre c, unit normal n).
+function decal(M, c, n, r, layers) {
+  let a = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const nm = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
+  const e1 = nm(cr(n, a)), e2 = nm(cr(n, e1));
+  M.part();
+  layers.forEach(([shape, f, mat], li) => {
+    const off = 0.015 * (li + 1), rr = r * f, pts = [];
+    const N = shape === 'star' ? 10 : 18;
+    for (let k = 0; k < N; k++) {
+      const ang = (k / N) * Math.PI * 2 + Math.PI / 2, rad = shape === 'star' ? (k % 2 ? rr * 0.4 : rr) : rr;
+      const u = Math.cos(ang) * rad, v = Math.sin(ang) * rad;
+      pts.push(M.vert(c[0] + e1[0] * u + e2[0] * v + n[0] * off, c[1] + e1[1] * u + e2[1] * v + n[1] * off, c[2] + e1[2] * u + e2[2] * v + n[2] * off));
+    }
+    const ctr = M.vert(c[0] + n[0] * off, c[1] + n[1] * off, c[2] + n[2] * off);
+    for (let k = 0; k < N; k++) M.tri(ctr, pts[k], pts[(k + 1) % N], mat);
+  });
+}
+
+function markings(M, ac, panels) {
+  const ins = insigniaFor(ac);
+  if (!ins) return;
+  const wingP = panels.filter(q => q.p.name === 'wing');
+  for (const { secs, zs } of wingP) {
+    const A = secs[0], B = secs[secs.length - 1];
+    const f = ac.cat === 'Bomber' ? 0.62 : 0.66;
+    for (const side of [1, -1]) {
+      // US practice: star on the upper left and lower right wing only
+      if (ins.where === 'us' && !((side > 0 && zs < 0) || (side < 0 && zs > 0))) continue;
+      const pt = panelPoint(secs, f, 0.45, side);
+      const chord = [B.te[0] - B.le[0], 0, B.te[2] - B.le[2]], span = [B.le[0] - A.le[0], B.le[1] - A.le[1], B.le[2] - A.le[2]];
+      let n = [chord[1] * span[2] - chord[2] * span[1], chord[2] * span[0] - chord[0] * span[2], chord[0] * span[1] - chord[1] * span[0]];
+      const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
+      if (Math.sign(n[1]) !== side) n = n.map(x => -x);
+      decal(M, [pt[0], pt[1], pt[2]], n, clamp(pt[3] * 0.3, 0.35, 2.4), ins.wing);
+    }
+  }
+  if (!ins.fin) return;
+  for (const { secs } of panels) {
+    const A = secs[0], B = secs[secs.length - 1];
+    const dy = B.le[1] - A.le[1], dz = B.le[2] - A.le[2];
+    if (Math.abs(dy) < Math.abs(dz) * 1.5 || dy < 0.8) continue;   // fins only
+    const f = 0.5, le = [0, 1, 2].map(k => lerp(A.le[k], B.le[k], f)), te = [0, 1, 2].map(k => lerp(A.te[k], B.te[k], f));
+    const c = [0, 1, 2].map(k => lerp(le[k], te[k], 0.45)), ch = Math.hypot(te[0] - le[0], te[2] - le[2]);
+    const d = [dz, 0, 0], span = [0, dy, dz];
+    let n = [0, -dz, dy]; const l = Math.hypot(...n) || 1; n = n.map(x => x / l);
+    const t = afT(0.45) * lerp(A.t, B.t, f) * ch;
+    for (const sg of [1, -1]) decal(M, [c[0] + n[0] * t * sg, c[1] + n[1] * t * sg, c[2] + n[2] * t * sg], n.map(x => x * sg), clamp(ch * 0.26, 0.3, 1.6), ins.wing);
+  }
+}
+
+// ---- landing gear: struts and wheels down to the floor
+
+function fuselageBottom(ac, s) {
+  const f = ac.geo.find(p => p.t === 'loft' && !p.z && p.fine !== 0 && p.mat !== 'glass') || ac.geo[0];
+  const st = f.st;
+  for (let i = 0; i + 1 < st.length; i++) if (s >= st[i][0] && s <= st[i + 1][0]) {
+    const u = (s - st[i][0]) / ((st[i + 1][0] - st[i][0]) || 1);
+    return lerp((st[i][4] || 0) - st[i][3], (st[i + 1][4] || 0) - st[i + 1][3], u);
+  }
+  return -0.5;
+}
+
+function landingGear(M, ac, groundY) {
+  const L = ac.dims.len, big = ac.cat === 'Bomber';
+  const legs = ac.gear || [
+    { s: 0.19 * L, z: 0, r: big ? 0.5 : 0.28, n: big ? 2 : 1 },
+    { s: 0.6 * L, z: clamp(ac.dims.span * 0.13, 1.1, 3.6), r: big ? 0.62 : 0.38, n: big ? 4 : 1, mirror: true },
+  ];
+  for (const g of legs) for (const zs of g.mirror ? [1, -1] : [1]) {
+    const x = L / 2 - g.s, z = g.z * zs, r = g.r, w = r * 0.62;
+    const top = g.y ?? fuselageBottom(ac, g.s) + 0.15, hub = groundY + r;
+    M.part();
+    const sr = Math.max(0.06, r * 0.22);
+    loft(M, [[0, sr, sr, sr], [top - hub, sr * 0.8, sr * 0.8, sr * 0.8]], { seg: 8, mat: 'strut', tf: (a, b, c) => [x + b, top + a, z + c] });
+    const wheels = g.n === 4 ? [[r * 1.15, -1], [r * 1.15, 1], [-r * 1.15, -1], [-r * 1.15, 1]] : g.n === 2 ? [[0, -1], [0, 1]] : [[0, 0]];
+    if (g.n === 4) loft(M, [[0, 0.08, 0.08, 0.08], [r * 2.6, 0.08, 0.08, 0.08]], { seg: 6, mat: 'strut', x0: x + r * 1.3, tf: (a, b, c) => [a, hub + b, z + c] });
+    for (const [dx, dzs] of wheels) {
+      const cx = x + dx, cz = z + dzs * (w / 2 + sr + 0.03);
+      M.part();
+      loft(M, [[0, r * 0.55, r * 0.55, r * 0.55], [0.03, r * 0.95, r * 0.95, r * 0.95], [w * 0.5, r, r, r], [w - 0.03, r * 0.95, r * 0.95, r * 0.95], [w, r * 0.55, r * 0.55, r * 0.55]],
+        { seg: 14, mat: 'tire', capF: 'strut', capB: 'strut', tf: (a, b, c) => [cx + c, hub + b, cz - a - w / 2] });
+    }
+  }
 }
 
 // ---- 35-aircraft.js
@@ -1541,7 +1755,7 @@ A({
     canopy([[4, 0.05, 0.02, 0.02, 1.2], [5, 0.7, 0.45, 0.05, 1.3], [6.8, 0.8, 0.5, 0.05, 1.4], [8.2, 0.4, 0.25, 0.03, 1.42], [8.8, 0.05, 0.05, 0.02, 1.42]], { mat: 'dark' }),
     wing('wing', [[8.5, 0, 1.3, 20, 0.1], [14.1, 0, 6, 14.4, 0.09], [19.5, -0.05, 12, 9.0, 0.08], [23.9, -0.2, 16.9, 3.2, 0.06]]),
     pod([[9.8, 1.1, 0.55, 0.55, 0, 4], [11, 1.15, 0.6, 0.6, 0, 4], [14, 1.0, 0.5, 0.5, 0, 3]], 2.6, { capF: 'hole' }),
-    { t: 'panel', sec: vfin(20.5, 1.0, 0, 9.5, 6.8, 45, 2.2, 0, 0.08) },
+    { t: 'panel', sec: vfin(21.5, 1.0, 0, 8.5, 4.9, 45, 2.4, 0, 0.08) },
     ...[1.95, 3.25].map(z => noz({ s: 29.2, z, y: 0, r: 0.5, len: 1.0, mirror: true })),
   ],
   stations: [
@@ -1553,6 +1767,71 @@ A({
     { name: 'Blue Steel', note: 'A stand-off nuclear missile, half buried in the belly.', set: { Belly: 'Blue Steel' } },
   ],
 });
+
+// ---- 37-details.js
+// Systems and programme details per aircraft. Costs are unit flyaway in the year given unless stated.
+const DETAILS = {
+  f16: { radar: 'AN/APG-68(V)9 pulse-Doppler; upgraded jets carry the AN/APG-83 SABR AESA', sensors: 'Sniper or LITENING targeting pod, JHMCS helmet sight', ew: 'AN/ALQ-213 countermeasures, AN/ALR-56M radar warning', cost: 'US$18.8 million (1998); F-16 Block 70 about $64 million', operators: '25 air forces including the US, Israel, Turkey, Egypt, Greece, Poland, Pakistan, Taiwan, Ukraine', combat: 'Osirak raid (1981), Gulf War, Balkans, Afghanistan, Iraq, Syria, Ukraine', variants: 'F-16A/B, C/D, E/F Block 60, Block 70/72 (F-16V)' },
+  f22: { radar: 'AN/APG-77 AESA with low probability of intercept', sensors: 'AN/AAR-56 missile launch detectors', ew: 'AN/ALR-94 passive receiver, which can locate emitters beyond radar range', cost: 'About US$150 million (2009)', operators: 'US Air Force only; export is banned by law', combat: 'First combat strike over Syria in 2014; shot down a Chinese surveillance balloon with an AIM-9X in 2023', variants: 'F-22A (a two-seat F-22B was cancelled)' },
+  f35a: { radar: 'AN/APG-81 AESA (AN/APG-85 from Lot 17)', sensors: 'AN/AAQ-40 EOTS targeting sensor, AN/AAQ-37 DAS: six infrared cameras that let the pilot see through the airframe', ew: 'AN/ASQ-239 electronic warfare suite', cost: 'About US$82.5 million (Lots 15-17)', operators: 'US, UK, Italy, Netherlands, Norway, Denmark, Australia, Israel, Japan, South Korea, Belgium, Poland, Finland, Switzerland, Singapore, Czechia, Germany, Canada, Greece, Romania', combat: 'First combat use by Israel in 2018; strikes on Iran in 2024-25', variants: 'F-35A (runways), F-35B (short take-off, vertical landing), F-35C (carriers)' },
+  f15e: { radar: 'AN/APG-82(V)1 AESA', sensors: 'Sniper targeting pod, LANTIRN navigation pod', ew: 'AN/ALQ-250 EPAWSS (replacing AN/ALQ-135)', cost: 'US$31.1 million (1998)', operators: 'US; derivatives in Israel (F-15I), Saudi Arabia (F-15SA), South Korea (F-15K), Singapore (F-15SG), Qatar (F-15QA)', combat: 'Gulf War Scud hunting, Balkans, Afghanistan, Iraq, Libya, Syria; shot down Iranian drones in 2024', variants: 'F-15E, export F-15I/K/SG/SA/QA; the F-15EX Eagle II is the newest development' },
+  fa18e: { radar: 'AN/APG-79 AESA', sensors: 'ATFLIR targeting pod, IRST21 infrared search and track (Block III)', ew: 'AN/ALQ-214 jammer, AN/ALR-67 radar warning', cost: 'About US$67 million (2021)', operators: 'US Navy, Royal Australian Air Force, Kuwait', combat: 'Iraq from 2002, Syria (shot down a Su-22 in 2017), Red Sea operations against the Houthis 2023-25', variants: 'F/A-18E single seat, F two seat, EA-18G Growler electronic attack' },
+  f14d: { radar: 'AN/APG-71, a digital development of the AWG-9 that could track 24 targets', sensors: 'AN/AAS-42 infrared search and track, TCS television camera', ew: 'AN/ALQ-165 jammer', cost: 'About US$38 million (1998)', operators: 'US Navy 1974-2006; Iran still flies the F-14A', combat: 'Gulf of Sidra (1981, 1989), Iran-Iraq War, Bosnia, Afghanistan, Iraq', variants: 'F-14A, F-14B, F-14D' },
+  f4e: { radar: 'AN/APQ-120', sensors: 'Pave Spike laser designator pod (later Pave Tack)', ew: 'AN/ALQ-119 or AN/ALQ-131 jamming pods', cost: 'About US$2.4 million (1965)', operators: 'US, Israel, Germany, Japan, Turkey, Greece, South Korea, Iran, Egypt and others', combat: 'Vietnam, Arab-Israeli wars, Iran-Iraq War, Gulf War (F-4G Wild Weasel)', variants: 'F-4B/J/S (Navy), C/D/E (Air Force), F-4F, F-4EJ, RF-4 reconnaissance, F-4G Wild Weasel' },
+  su35: { radar: 'N035 Irbis-E passive electronically scanned array, about 350 km against large targets', sensors: 'OLS-35 infrared search and track', ew: 'L175M Khibiny-M electronic warfare suite', cost: 'About US$85 million (est.)', operators: 'Russia, China', combat: 'Syria, Ukraine', variants: 'Su-35S (Russia), Su-35SK (China); the earlier Su-35 name was used for the Su-27M' },
+  su57: { radar: 'N036 Byelka AESA with nose and cheek arrays, plus L-band arrays in the wing leading edges', sensors: '101KS Atoll infrared search, missile warning and laser countermeasures', ew: 'Himalayas electronic warfare suite', cost: 'About US$35-50 million (est.)', operators: 'Russia', combat: 'Trials in Syria (2018), stand-off strikes over Ukraine', variants: 'Su-57, export Su-57E, Su-57M with the new AL-51F1 engine' },
+  mig29: { radar: 'N019 Sapfir-29 pulse-Doppler', sensors: 'OEPrNK-29 infrared search and laser rangefinder, Shchel-3UM helmet sight', ew: 'SPO-15 radar warning', cost: 'About US$11 million (1990s, est.)', operators: 'About 30 air forces including Russia, India, Poland, Ukraine, Serbia, Iran, Algeria, North Korea', combat: 'Gulf War, Kosovo, Eritrea-Ethiopia, Ukraine', variants: '9.12, 9.13, MiG-29S, SMT, MiG-29K/KUB (naval), MiG-35' },
+  mig31: { radar: 'Zaslon-M passive phased array, the first electronically scanned radar on a fighter (Zaslon, 1981)', sensors: '8TK infrared search and track', ew: 'Datalink to share targets across a flight of four', cost: 'Not published', operators: 'Russia, Kazakhstan', combat: 'Ukraine: very long range R-37M shots and Kinzhal launches', variants: 'MiG-31, 31B, 31BM, 31K (Kinzhal), 31I (anti-satellite)' },
+  mig21: { radar: 'RP-22 Sapfir-21', sensors: 'ASP-PF gyro gunsight', ew: 'SPO-10 radar warning', cost: 'Very low; the design goal was mass production', operators: 'About 60 countries over its life; a handful today', combat: 'Vietnam, Arab-Israeli wars, Indo-Pakistani wars (including 2019), Angola, Balkans', variants: 'MiG-21F-13, PF, MF, bis, two-seat UM; copied in China as the J-7 / F-7' },
+  typhoon: { radar: 'CAPTOR-M, being replaced by CAPTOR-E AESA (ECRS Mk2 in RAF jets)', sensors: 'PIRATE infrared search and track, Striker II helmet', ew: 'Praetorian defensive aids suite with towed decoys', cost: 'About €90 million (est.)', operators: 'UK, Germany, Italy, Spain, Austria, Saudi Arabia, Oman, Kuwait, Qatar; ordered by Turkey', combat: 'Libya (2011), Iraq and Syria, strikes on the Houthis', variants: 'Tranche 1 to 4; Typhoon EK electronic attack planned for Germany' },
+  rafale: { radar: 'RBE2-AA AESA', sensors: 'OSF front-sector optronics, TALIOS targeting pod', ew: 'SPECTRA integrated self-protection suite', cost: 'About €80 million', operators: 'France, Egypt, Qatar, India, Greece, Croatia, Indonesia; ordered by the UAE and Serbia', combat: 'Afghanistan, Libya, Mali, Iraq and Syria, India (2025)', variants: 'Rafale C single seat, B two seat, M naval; F4 and F5 standards' },
+  gripen: { radar: 'PS-05/A (Gripen E: Raven ES-05 AESA)', sensors: 'LITENING pod; Gripen E adds Skyward-G IRST', ew: 'EWS 39 integrated suite', cost: 'About US$30-60 million depending on package', operators: 'Sweden, Czechia, Hungary, South Africa, Thailand, Brazil (E); ordered by Colombia', combat: 'Reconnaissance over Libya (2011)', variants: 'JAS 39A/B, C/D, E/F' },
+  j20: { radar: 'Type 1475 (KLJ-5) AESA (est.)', sensors: 'Chin-mounted electro-optical targeting system, distributed aperture sensors', ew: 'Not published', cost: 'About US$110 million (est.)', operators: 'People\'s Liberation Army Air Force', combat: 'None', variants: 'J-20, J-20A, J-20S two-seat' },
+  m2000: { radar: 'RDI pulse-Doppler (Mirage 2000-5: RDY)', sensors: 'Helmet sight on later versions', ew: 'ICMS integrated countermeasures', cost: 'About US$23 million (est.)', operators: 'France, India, Greece, UAE, Egypt, Taiwan, Qatar, Peru; retired by Brazil', combat: 'Gulf War, Bosnia, Kargil (1999), Afghanistan, Balakot (2019)', variants: '2000C, B, N (nuclear), D (strike), -5, -9' },
+  tornado: { radar: 'Texas Instruments ground-mapping radar and terrain-following radar', sensors: 'LITENING pod, RAPTOR reconnaissance pod (GR4)', ew: 'Sky Shadow or Cerberus jamming pods, BOZ chaff dispensers', cost: 'Not published', operators: 'Germany, Italy, Saudi Arabia; UK retired it in 2019', combat: 'Gulf War runway attacks, Kosovo, Afghanistan, Iraq, Libya, Syria', variants: 'IDS strike, ECR electronic combat, ADV (F3) interceptor, GR4' },
+  a10: { radar: 'None', sensors: 'Sniper or LITENING pod, Scorpion helmet cueing', ew: 'AN/ALQ-131 or AN/ALQ-184 pod, AN/AAR-47 missile warning', cost: 'US$18.8 million (1994)', operators: 'US Air Force', combat: 'Gulf War, Balkans, Afghanistan, Iraq, Syria', variants: 'A-10A, OA-10A forward air control, A-10C' },
+  b52h: { radar: 'AN/APQ-166, being replaced by an AESA derived from the AN/APG-79', sensors: 'Electro-optical viewing system (infrared and TV), LITENING or Sniper pod', ew: 'AN/ALQ-172 jammer', cost: 'About US$84 million (2012 dollars)', operators: 'US Air Force', combat: 'Vietnam (Linebacker II), Gulf War, Kosovo, Afghanistan, Iraq, Syria', variants: 'B-52A to H; the B-52J adds Rolls-Royce F130 engines and a new radar' },
+  b1b: { radar: 'AN/APQ-164 passive electronically scanned array with terrain following', sensors: 'Sniper targeting pod on the forward external station', ew: 'AN/ALQ-161 defensive system, towed decoys', cost: 'US$283 million (1998)', operators: 'US Air Force', combat: 'Operation Desert Fox (1998), Kosovo, Afghanistan, Iraq, Libya, Syria', variants: 'B-1A prototypes, B-1B' },
+  b2a: { radar: 'AN/APQ-181, upgraded to an AESA', sensors: 'Low-observable antennas blended into the skin', ew: 'Defensive management system that plots routes around enemy radars', cost: 'US$737 million flyaway (1997), about US$2.1 billion including development', operators: 'US Air Force, 509th Bomb Wing', combat: 'Kosovo (1999), Afghanistan, Iraq, Libya, Yemen (2024), Iran (2025, 14 GBU-57s on Fordow and Natanz)', variants: 'B-2A only; the B-21 Raider is its successor' },
+  tu160: { radar: 'Obzor-K navigation and attack radar', sensors: 'Sopka terrain-following radar, optical bombsight', ew: 'Baikal defensive suite', cost: 'About US$250 million (est.)', operators: 'Russia', combat: 'Syria from 2015, Ukraine', variants: 'Tu-160, Tu-160M upgrade, new-build Tu-160M' },
+  tu22m3: { radar: 'PN-A (Leninets) attack radar', sensors: 'OPB-15T optical-TV bombsight', ew: 'Ural defensive suite', cost: 'Not published', operators: 'Russia', combat: 'Afghanistan, Chechnya, Georgia (2008), Syria, Ukraine', variants: 'Tu-22M0, M2, M3, M3M upgrade' },
+  tu95: { radar: 'Obzor-MS', sensors: 'Tail gunner\'s radar and optical sight', ew: 'Meteor-NM defensive suite', cost: 'Not published', operators: 'Russia; the Tu-142 maritime version also served India', combat: 'Syria (2015), Ukraine', variants: 'Tu-95, 95M, 95K, 95MS, 95MSM; Tu-142 maritime patrol; Tu-114 airliner' },
+  vulcan: { radar: 'H2S Mk 9 bombing radar with the Navigation and Bombing System', sensors: 'Periscopic bombsight', ew: 'Red Steer tail warning radar, electronic countermeasures in the tail cone', cost: 'Not published', operators: 'Royal Air Force', combat: 'Falklands War (1982): Black Buck raids on Port Stanley', variants: 'B.1, B.1A, B.2, SR.2 maritime reconnaissance, K.2 tanker' },
+};
+for (const a of AIRCRAFT) Object.assign(a, DETAILS[a.key] || {});
+
+// Paint schemes and landing gear layouts.
+// camo: cols = camouflage colours (noise pattern), top = darker upper surfaces, under = underside colour.
+// gear: legs [{ s (m aft of nose), z, r (wheel radius), n (wheels: 1, 2 or 4), mirror }].
+const VISUALS = {
+  f16: { camo: { top: '#7f888f', under: '#a3abb1' }, gear: [{ s: 4.6, z: 0, r: 0.25, n: 1 }, { s: 9.3, z: 1.18, r: 0.38, n: 1, mirror: true }] },
+  f22: { camo: { cols: ['#8b939a', '#767f86', '#949ca3'], f: 0.3 }, gear: [{ s: 3.4, z: 0, r: 0.3, n: 1 }, { s: 11.2, z: 1.6, r: 0.42, n: 1, mirror: true }] },
+  f35a: { camo: { under: '#80878d' }, gear: [{ s: 3.6, z: 0, r: 0.28, n: 1 }, { s: 9.4, z: 1.35, r: 0.4, n: 1, mirror: true }] },
+  f15e: { camo: { under: '#737a7f' }, gear: [{ s: 4.4, z: 0, r: 0.3, n: 1 }, { s: 11.4, z: 1.37, r: 0.42, n: 1, mirror: true }] },
+  fa18e: { camo: { top: '#7e868c', under: '#a5acb1' }, gear: [{ s: 4.0, z: 0, r: 0.28, n: 2 }, { s: 10.8, z: 1.6, r: 0.4, n: 1, mirror: true }] },
+  f14d: { camo: { top: '#8e959a', under: '#b3b9bd' }, gear: [{ s: 4.2, z: 0, r: 0.3, n: 2 }, { s: 11.2, z: 2.5, r: 0.45, n: 1, mirror: true }] },
+  f4e: { insignia: 'usColor', camo: { cols: ['#b09b72', '#5c6a3a', '#3f4a2c'], under: '#c3c7c3', f: 0.2 }, gear: [{ s: 3.4, z: 0, r: 0.3, n: 2 }, { s: 11.4, z: 2.7, r: 0.42, n: 1, mirror: true }] },
+  su35: { camo: { cols: ['#9fb2c2', '#6a8aa3', '#c3ced6'], under: '#b8c8d4', f: 0.2 }, gear: [{ s: 5.0, z: 0, r: 0.32, n: 2 }, { s: 12.6, z: 2.2, r: 0.5, n: 1, mirror: true }] },
+  su57: { camo: { cols: ['#9aa7b3', '#5f6e7c', '#b9c3cb', '#7a8895'], f: 0.45 }, gear: [{ s: 4.6, z: 0, r: 0.32, n: 2 }, { s: 11.8, z: 2.1, r: 0.5, n: 1, mirror: true }] },
+  mig29: { camo: { cols: ['#a4acb1', '#8a959c', '#b4bcc0'], under: '#c3c9cc', f: 0.25 }, gear: [{ s: 4.2, z: 0, r: 0.28, n: 2 }, { s: 10.4, z: 1.55, r: 0.43, n: 1, mirror: true }] },
+  mig31: { camo: { under: '#b8bdc0' }, gear: [{ s: 4.8, z: 0, r: 0.35, n: 2 }, { s: 13.2, z: 1.8, r: 0.45, n: 4, mirror: true }] },
+  mig21: { camo: { top: '#aeb3b5', under: '#c5c9ca' }, gear: [{ s: 3.4, z: 0, r: 0.25, n: 1 }, { s: 8.6, z: 1.35, r: 0.35, n: 1, mirror: true }] },
+  typhoon: { camo: { under: '#a2abb2' }, gear: [{ s: 3.6, z: 0, r: 0.27, n: 1 }, { s: 9.2, z: 1.3, r: 0.4, n: 1, mirror: true }] },
+  rafale: { camo: { under: '#9fa7ad' }, gear: [{ s: 3.3, z: 0, r: 0.27, n: 2 }, { s: 9.0, z: 1.35, r: 0.38, n: 1, mirror: true }] },
+  gripen: { camo: { top: '#7f898f', under: '#a2abb1' }, gear: [{ s: 3.0, z: 0, r: 0.25, n: 2 }, { s: 8.4, z: 1.2, r: 0.35, n: 1, mirror: true }] },
+  j20: { camo: { cols: ['#7e868c', '#6a7278', '#8c949a'], f: 0.3 }, gear: [{ s: 4.2, z: 0, r: 0.3, n: 2 }, { s: 12.2, z: 1.6, r: 0.45, n: 1, mirror: true }] },
+  m2000: { camo: { cols: ['#8f989e', '#6f7e8c'], under: '#a8b0b6', f: 0.25 }, gear: [{ s: 3.4, z: 0, r: 0.26, n: 2 }, { s: 8.8, z: 1.7, r: 0.38, n: 1, mirror: true }] },
+  tornado: { camo: { cols: ['#56634f', '#6b7377', '#46513f'], wrap: true, f: 0.22 }, gear: [{ s: 3.4, z: 0, r: 0.28, n: 2 }, { s: 9.8, z: 1.55, r: 0.45, n: 1, mirror: true }] },
+  a10: { camo: { cols: ['#7a8084', '#6a7074'], under: '#8a9094', f: 0.2 }, gear: [{ s: 1.9, z: 0.35, r: 0.33, n: 1 }, { s: 7.2, z: 2.6, r: 0.45, n: 1, mirror: true, y: -0.8 }] },
+  b52h: { camo: { under: '#62676a' }, gear: [{ s: 15.5, z: 1.25, r: 0.55, n: 2, mirror: true }, { s: 27.5, z: 1.25, r: 0.55, n: 2, mirror: true }, { s: 34, z: 22.8, r: 0.35, n: 1, mirror: true, y: -0.3 }] },
+  b1b: { camo: { under: '#4a4f53' }, gear: [{ s: 7.5, z: 0, r: 0.5, n: 2 }, { s: 25.5, z: 2.2, r: 0.62, n: 4, mirror: true }] },
+  b2a: { camo: { under: '#474c50' }, gear: [{ s: 5.5, z: 0, r: 0.5, n: 2 }, { s: 12.5, z: 6.0, r: 0.65, n: 4, mirror: true, y: -0.6 }] },
+  tu160: { camo: { under: '#e1e3e3' }, gear: [{ s: 7.5, z: 0, r: 0.55, n: 2 }, { s: 32, z: 2.7, r: 0.6, n: 4, mirror: true }] },
+  tu22m3: { camo: { under: '#c5cbce' }, gear: [{ s: 6.5, z: 0, r: 0.5, n: 2 }, { s: 22.5, z: 3.6, r: 0.55, n: 4, mirror: true }] },
+  tu95: { camo: { under: '#d2d6d8' }, gear: [{ s: 6.4, z: 0, r: 0.55, n: 2 }, { s: 26.5, z: 7.6, r: 0.7, n: 4, mirror: true, y: -1.0 }] },
+  vulcan: { camo: { cols: ['#56634f', '#7d8784'], under: '#5b5f5b', f: 0.12 }, gear: [{ s: 6.5, z: 0, r: 0.5, n: 2 }, { s: 17.5, z: 4.8, r: 0.55, n: 4, mirror: true, y: -0.5 }] },
+};
+for (const a of AIRCRAFT) Object.assign(a, VISUALS[a.key] || {});
 
 // ---- 40-render.js
 // CPU renderer: rasterises the mesh into a sub-cell buffer (2 x 4 samples per character cell),
@@ -1574,7 +1853,7 @@ class Renderer {
     this.z = new Float32Array(n); this.lum = new Float32Array(n); this.spec = new Float32Array(n);
     this.cr = new Float32Array(n); this.cg = new Float32Array(n); this.cb = new Float32Array(n);
     this.er = new Float32Array(n); this.eg = new Float32Array(n); this.eb = new Float32Array(n);
-    this.tag = new Uint16Array(n);
+    this.tag = new Uint16Array(n); this.pt = new Uint16Array(n);
     const c = cols * rows;
     this.chars = new Uint8Array(c); this.col = new Uint8Array(c * 3); this.cellTag = new Uint16Array(c);
     this.gr = new Float32Array(c); this.gg = new Float32Array(c); this.gb = new Float32Array(c); this.tmp = new Float32Array(c);
@@ -1604,6 +1883,7 @@ class Renderer {
     this.px = new Float32Array(nv); this.py = new Float32Array(nv); this.pz = new Float32Array(nv);
     this.dp = new Float32Array(nv); this.dm = new Float32Array(nv); this.sp = new Float32Array(nv); this.sm = new Float32Array(nv);
     this.matCol = MAT_KEYS.map(k => k === 'skin' || k === 'door' ? this.paint : k === 'skin2' ? this.paint2 : MATS[k].c);
+    this.triCol = paintScheme(m, FN, ac, this.matCol);
     this.matSp = MAT_KEYS.map(k => MATS[k].sp);
     this.shadow = buildShadow(m);
   }
@@ -1611,7 +1891,7 @@ class Renderer {
   // cam: {eye, f, r, u, foc, cx, cy}; o: {throttle, time, ground, spin}
   render(cam, o) {
     const { W, H } = this, n = W * H, m = this.scene.mesh;
-    this.z.fill(Infinity); this.lum.fill(0); this.spec.fill(0); this.tag.fill(0);
+    this.z.fill(Infinity); this.lum.fill(0); this.spec.fill(0); this.tag.fill(0); this.pt.fill(0);
     this.cr.fill(0); this.cg.fill(0); this.cb.fill(0); this.er.fill(0); this.eg.fill(0); this.eb.fill(0);
     const { eye, f, r, u, foc, cx, cy } = cam;
 
@@ -1639,7 +1919,7 @@ class Renderer {
       sp[i] = h > 0 ? h ** 24 : 0; sm[i] = h < 0 ? (-h) ** 24 : 0;
     }
 
-    const T = m.T, M = m.M, G = m.G, FN = this.FN, VS = this.VS, Z = this.z, LU = this.lum, SP = this.spec, TG = this.tag;
+    const T = m.T, M = m.M, G = m.G, P = m.P, FN = this.FN, VS = this.VS, Z = this.z, LU = this.lum, SP = this.spec, TG = this.tag, PT = this.pt, TC = this.triCol;
     const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
     const glowMat = MAT_ID.burner, heat = burnerColor(this.ac, o.throttle);
     const spinning = o.spin;
@@ -1658,7 +1938,7 @@ class Renderer {
       const sf = FN[t * 3] * vx + FN[t * 3 + 1] * vy + FN[t * 3 + 2] * vz < 0 ? 1 : -1;
       const la = VS[t * 3] * sf > 0 ? dp[a] : dm[a], lb = VS[t * 3 + 1] * sf > 0 ? dp[b] : dm[b], lc = VS[t * 3 + 2] * sf > 0 ? dp[c] : dm[c];
       const sa = VS[t * 3] * sf > 0 ? sp[a] : sm[a], sb = VS[t * 3 + 1] * sf > 0 ? sp[b] : sm[b], sc = VS[t * 3 + 2] * sf > 0 ? sp[c] : sm[c];
-      const mi = M[t], col = this.matCol[mi], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t];
+      const mi = M[t], cr0 = TC[t * 3], cg0 = TC[t * 3 + 1], cb0 = TC[t * 3 + 2], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t], pid = P[t];
       const ia = 1 / area;
       for (let y = y0; y <= y1; y++) {
         const sy = y + 0.5;
@@ -1670,27 +1950,33 @@ class Renderer {
           if (w0 < 0 || w1 < 0 || w2 < 0) continue;
           const zz = w0 * pz[a] + w1 * pz[b] + w2 * pz[c], k = y * W + x;
           if (zz >= Z[k]) continue;
-          Z[k] = zz; TG[k] = tg;
+          Z[k] = zz; TG[k] = tg; PT[k] = pid;
           if (glow) {
             LU[k] = heat[3]; SP[k] = 0; CR[k] = heat[0]; CG[k] = heat[1]; CB[k] = heat[2];
             ER[k] = heat[0] * heat[3]; EG[k] = heat[1] * heat[3]; EB[k] = heat[2] * heat[3];
           } else {
             LU[k] = w0 * la + w1 * lb + w2 * lc; SP[k] = (w0 * sa + w1 * sb + w2 * sc) * ms;
-            CR[k] = col[0]; CG[k] = col[1]; CB[k] = col[2];
+            CR[k] = cr0; CG[k] = cg0; CB[k] = cb0;
             ER[k] = 0; EG[k] = 0; EB[k] = 0;
           }
         }
       }
     }
 
-    // Ink lines where depth jumps (a wing edge over the fuselage), so shapes separate.
+    // Ink lines: strong where depth jumps (a wing edge over the fuselage), medium where two parts
+    // meet (canopy, intakes, fins), light for hinge lines and panel seams inside one part.
     for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++) {
       const k = y * W + x, z0 = Z[k];
       if (z0 === Infinity) continue;
       for (let qq = 0; qq < 2; qq++) {
         const q = qq ? k + W : k + 1, z1 = Z[q];
         if (z1 === Infinity) continue;
-        if (Math.abs(z1 - z0) > 0.25 + 0.012 * z0) { const far = z1 > z0 ? q : k; LU[far] *= 0.3; SP[far] *= 0.3; }
+        const far = z1 > z0 ? q : k;
+        if (Math.abs(z1 - z0) > 0.25 + 0.012 * z0) { LU[far] *= 0.3; SP[far] *= 0.3; }
+        else if (PT[q] !== PT[k]) {
+          const f = (PT[q] >> 4) !== (PT[k] >> 4) ? 0.5 : 0.7;
+          LU[far] *= f; SP[far] *= f;
+        }
       }
     }
 
@@ -1823,19 +2109,21 @@ function buildShadow(m) {
 function ground(R, cam, o) {
   const { W, H, z: Z } = R, { eye, f, r, u, foc, cx, cy } = cam, gy = o.groundY, sh = R.shadow;
   const lights = o.floorLights || [];
+  // The camera's right vector is level (r[1] = 0), so the ray's height and its hit distance are
+  // constant along a screen row: work them out once per row.
   for (let y = 0; y < H; y++) {
     const vy = -(y + 0.5 - cy) / foc;
+    const dy = f[1] + u[1] * vy;
+    if (dy >= -1e-4) continue;
+    const t = (gy - eye[1]) / dy, pw = t / foc * 1.2;
+    const bx = eye[0] + (f[0] + u[0] * vy) * t, bz = eye[2] + (f[2] + u[2] * vy) * t;
     for (let x = 0; x < W; x++) {
       const k = y * W + x;
       if (Z[k] !== Infinity) continue;
       const vx = (x + 0.5 - cx) / foc;
-      const dx = f[0] + r[0] * vx + u[0] * vy, dy = f[1] + r[1] * vx + u[1] * vy, dz = f[2] + r[2] * vx + u[2] * vy;
-      if (dy >= -1e-4) continue;
-      const t = (gy - eye[1]) / dy;
-      const gx = eye[0] + dx * t, gz = eye[2] + dz * t;
+      const gx = bx + r[0] * vx * t, gz = bz + r[2] * vx * t;
       const dist = Math.hypot(gx, gz), fade = 1 - smooth(o.groundR * 0.5, o.groundR, dist);
       if (fade <= 0) continue;
-      const pw = t / foc * 1.2;                         // sample footprint on the ground
       const st = o.groundStep || 2, ST = st * 5;
       const lx = Math.abs(gx - Math.round(gx / st) * st), lz = Math.abs(gz - Math.round(gz / st) * st);
       const Lx = Math.abs(gx - Math.round(gx / ST) * ST), Lz = Math.abs(gz - Math.round(gz / ST) * ST);
@@ -1846,7 +2134,7 @@ function ground(R, cam, o) {
       const shade = sxx >= 0 && szz >= 0 && sxx < sh.w && szz < sh.h && sh.a[szz * sh.w + sxx];
       if (shade) v = 0;
       let er = 0, eg = 0, eb = 0;
-      for (const L of lights) {
+      if (lights.length) for (const L of lights) {
         const d2 = (gx - L.x) ** 2 + (gz - L.z) ** 2, w = L.i / (1 + d2 / (L.r * L.r));
         er += w * L.c[0]; eg += w * L.c[1]; eb += w * L.c[2];
       }
@@ -1861,6 +2149,39 @@ function ground(R, cam, o) {
       }
     }
   }
+}
+
+// ---- paint schemes: camouflage from 3D value noise, lighter undersides, per triangle
+
+function vnoise(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), xf = x - xi, yf = y - yi, zf = z - zi;
+  const h = (a, b, c) => hash(a * 157 + b * 113 + c * 311);
+  const s = t => t * t * (3 - 2 * t), u = s(xf), v = s(yf), w = s(zf);
+  const l = (a, b, t) => a + (b - a) * t;
+  return l(l(l(h(xi, yi, zi), h(xi + 1, yi, zi), u), l(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), u), v),
+           l(l(h(xi, yi, zi + 1), h(xi + 1, yi, zi + 1), u), l(h(xi, yi + 1, zi + 1), h(xi + 1, yi + 1, zi + 1), u), v), w);
+}
+
+function paintScheme(m, FN, ac, matCol) {
+  const out = new Float32Array(m.nt * 3), cam = ac.camo || {};
+  const cols = (cam.cols || []).map(hex2rgb), under = cam.under ? hex2rgb(cam.under) : matCol[MAT_ID.skin].map(c => Math.min(1, c * 1.12 + 0.03));
+  const top = cam.top ? hex2rgb(cam.top) : null, f = cam.f || 0.22, skinIds = [MAT_ID.skin, MAT_ID.door];
+  for (let t = 0; t < m.nt; t++) {
+    let c = matCol[m.M[t]];
+    if (skinIds.includes(m.M[t]) && m.G[t] === 0) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 3; k++) { const v = m.T[t * 3 + k] * 3; cx += m.V[v]; cy += m.V[v + 1]; cz += m.V[v + 2]; }
+      cx /= 3; cy /= 3; cz /= 3;
+      const ny = FN[t * 3 + 1], down = ny < -0.35;
+      if (down && cam.wrap !== true) c = under;
+      else if (cols.length) {
+        const nz = vnoise(cx * f + 11, cy * f * 0.6 + 3, cz * f + 7);
+        c = cols[Math.floor(clamp((nz - 0.28) / 0.44, 0, 0.999) * cols.length)];
+      } else if (top && ny > 0.35) c = top;
+    }
+    out[t * 3] = c[0]; out[t * 3 + 1] = c[1]; out[t * 3 + 2] = c[2];
+  }
+  return out;
 }
 
 // ---- 42-camera.js

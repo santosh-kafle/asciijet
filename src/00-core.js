@@ -28,17 +28,29 @@ const MATS = {
   prop:    { c: [0.30, 0.30, 0.32], sp: 0.40, sh: 16 },
   door:    { c: [0.50, 0.54, 0.58], sp: 0.25, sh: 14 },   // open bay doors (skin tone set per aircraft)
   bay:     { c: [0.18, 0.19, 0.20], sp: 0.10, sh: 8 },
+  // national markings and landing gear
+  red:     { c: [0.80, 0.14, 0.12], sp: 0.30, sh: 12 },
+  blue:    { c: [0.16, 0.30, 0.62], sp: 0.30, sh: 12 },
+  yellow:  { c: [0.92, 0.76, 0.16], sp: 0.30, sh: 12 },
+  green:   { c: [0.15, 0.52, 0.25], sp: 0.30, sh: 12 },
+  black:   { c: [0.08, 0.08, 0.09], sp: 0.20, sh: 12 },
+  insig:   { c: [0.33, 0.36, 0.39], sp: 0.20, sh: 12 },   // low-visibility grey insignia
+  tire:    { c: [0.10, 0.10, 0.11], sp: 0.15, sh: 8 },
+  strut:   { c: [0.72, 0.73, 0.74], sp: 0.90, sh: 30 },
 };
 const MAT_KEYS = Object.keys(MATS);
 const MAT_ID = Object.fromEntries(MAT_KEYS.map((k, i) => [k, i]));
 
 const hex2rgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; };
 
-// Mesh builder: vertices, triangles, per-triangle material and tag (0 airframe, k+1 store station k).
+// Mesh builder: vertices, triangles, per-triangle material, tag (0 airframe, k+1 store station k)
+// and part id. Part ids draw the ink lines: component (high bits) outlines where parts meet,
+// sub-part (low 4 bits) for hinge lines and panel seams inside one component.
 class Mesh {
-  constructor() { this.v = []; this.t = []; this.m = []; this.g = []; }
+  constructor() { this.v = []; this.t = []; this.m = []; this.g = []; this.p = []; this.comp = 1; this.sub = 0; this.segMul = 1; }
+  part() { this.comp++; this.sub = 0; return this; }
   vert(x, y, z) { this.v.push(x, y, z); return this.v.length / 3 - 1; }
-  tri(a, b, c, mat, tag = 0) { this.t.push(a, b, c); this.m.push(MAT_ID[mat] ?? 0); this.g.push(tag); }
+  tri(a, b, c, mat, tag = 0) { this.t.push(a, b, c); this.m.push(MAT_ID[mat] ?? 0); this.g.push(tag); this.p.push((this.comp << 4) | (this.sub & 15)); }
   quad(a, b, c, d, mat, tag) { this.tri(a, b, c, mat, tag); this.tri(a, c, d, mat, tag); }
   append(o) {
     const base = this.v.length / 3;
@@ -46,6 +58,7 @@ class Mesh {
     for (const i of o.t) this.t.push(i + base);
     for (const x of o.m) this.m.push(x);
     for (const x of o.g) this.g.push(x);
+    for (const x of o.p) this.p.push(x);
   }
   // Freeze into typed arrays and compute smooth vertex normals.
   finish() {
@@ -66,6 +79,6 @@ class Mesh {
       const l = Math.hypot(N[i], N[i + 1], N[i + 2]) || 1;
       N[i] /= l; N[i + 1] /= l; N[i + 2] /= l;
     }
-    return { V, N, T, M: new Uint8Array(this.m), G: new Uint16Array(this.g), nv: V.length / 3, nt: T.length / 3 };
+    return { V, N, T, M: new Uint8Array(this.m), G: new Uint16Array(this.g), P: new Uint16Array(this.p), nv: V.length / 3, nt: T.length / 3 };
   }
 }
