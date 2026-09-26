@@ -1,0 +1,93 @@
+<header id="top">
+  <button class="btn" id="menuBtn" aria-controls="index" aria-expanded="false">Aircraft</button>
+  <div class="brand"><h1>Jet<span>/</span>Atlas</h1><small>fighters and bombers in ASCII</small></div>
+  <div class="topr">
+    <button class="btn" id="cmpAdd" title="Add this aircraft to the comparison">+ Compare</button>
+    <button class="btn" id="helpBtn" title="Controls">? Keys</button>
+  </div>
+</header>
+
+<div id="stage">
+  <canvas id="view" aria-label="3D ASCII rendering of the selected aircraft. Drag to orbit, scroll to zoom."></canvas>
+  <div id="labels"></div>
+</div>
+
+<div id="console">
+  <div class="throttle" id="throttleBox">
+    <span class="tl">Throttle</span>
+    <div class="tt"><input id="thr" type="range" min="0" max="1000" value="0" aria-label="Throttle"></div>
+    <span class="state" id="thrState">Idle</span>
+    <div class="ticks" id="ticks"></div>
+    <div class="readout" id="readout"></div>
+  </div>
+  <div class="tools">
+    <button class="btn" data-view="q">3/4 <kbd>1</kbd></button>
+    <button class="btn" data-view="front">Front <kbd>2</kbd></button>
+    <button class="btn" data-view="side">Side <kbd>3</kbd></button>
+    <button class="btn" data-view="top">Top <kbd>4</kbd></button>
+    <button class="btn" data-view="below">Below <kbd>5</kbd></button>
+    <button class="btn" data-view="rear">Rear <kbd>6</kbd></button>
+    <span class="sep"></span>
+    <button class="btn hot" id="abBtn">Burner <kbd>A</kbd></button>
+    <button class="btn" id="baysBtn">Bays <kbd>B</kbd></button>
+    <button class="btn" id="labBtn">Labels <kbd>L</kbd></button>
+    <button class="btn" id="grdBtn">Floor <kbd>G</kbd></button>
+    <button class="btn" id="spinBtn">Orbit <kbd>Space</kbd></button>
+    <label id="sweepBox" hidden>Wing sweep <input id="sweep" type="range" min="0" max="100" value="0" aria-label="Wing sweep"><span id="sweepVal" class="num"></span></label>
+  </div>
+</div>
+
+<div id="cmpTray" hidden></div>
+
+<aside id="index" aria-label="Aircraft index">
+  <div class="search">
+    <input id="q" type="search" placeholder="Search name, country, weapon  ( / )" autocomplete="off" aria-label="Search aircraft">
+    <div class="chips" id="cats"></div>
+    <div class="sortrow"><span id="count"></span>
+      <label>sort <select id="sort" aria-label="Sort aircraft">
+        <option value="cat">type</option><option value="name">name</option><option value="year">first flight</option>
+        <option value="mach">top speed</option><option value="thrust">thrust</option><option value="mtow">max weight</option><option value="tw">thrust / weight</option>
+      </select></label>
+    </div>
+  </div>
+  <ul id="list"></ul>
+</aside>
+
+<section id="dossier" aria-label="Aircraft details">
+  <div class="dhead">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h2 id="acName"></h2>
+    <div class="sub" id="acSub"></div>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-tab="loadout" class="on">Loadout</button>
+    <button role="tab" data-tab="engine">Engine</button>
+    <button role="tab" data-tab="specs">Specs</button>
+    <button role="tab" data-tab="about">About</button>
+  </div>
+  <div id="pane" role="tabpanel"></div>
+</section>
+
+<div id="tip" hidden></div>
+
+<div id="cmp" hidden><div class="box" role="dialog" aria-label="Comparison"><h2>Compare <button class="btn" id="cmpClose">Close <kbd>Esc</kbd></button></h2><div id="cmpBody" style="overflow-x:auto"></div></div></div>
+
+<div id="help" hidden><div class="box" role="dialog" aria-label="Controls"><h2>Controls</h2>
+  <table>
+    <tr><td>drag</td><td>orbit the camera</td></tr>
+    <tr><td>scroll / pinch</td><td>zoom</td></tr>
+    <tr><td>hover a store</td><td>weapon details; click to highlight its station</td></tr>
+    <tr><td>W / S</td><td>throttle up / down</td></tr>
+    <tr><td>A</td><td>afterburner on / off (idle)</td></tr>
+    <tr><td>1 - 6</td><td>3/4, front, side, top, below, rear</td></tr>
+    <tr><td>B / L / G</td><td>weapon bays, store labels, floor</td></tr>
+    <tr><td>Space</td><td>orbit on / off</td></tr>
+    <tr><td>[ / ]</td><td>previous / next loadout</td></tr>
+    <tr><td>&larr; / &rarr;</td><td>previous / next aircraft</td></tr>
+    <tr><td>/</td><td>search</td></tr>
+    <tr><td>C</td><td>add to compare</td></tr>
+  </table>
+  <p class="note" style="margin-top:12px">Shapes are simplified from published dimensions; figures are public data for the variant named. Values marked <span class="est">EST</span> are open-source estimates. Thrust and fuel flow are sea-level static; fuel flow uses typical specific fuel consumption for the engine type.</p>
+  <p style="margin:14px 0 0"><button class="btn" id="helpClose">Close <kbd>Esc</kbd></button></p>
+</div></div>

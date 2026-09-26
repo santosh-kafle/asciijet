@@ -1,0 +1,708 @@
+// The aircraft. Geometry is authored in s = metres aft of the nose, y up, z starboard.
+// Shapes are simplified from published three-view dimensions; specs are public figures for the
+// variant named, and any field listed in `est` is an open-source estimate.
+const AIRCRAFT = [];
+const tan = d => Math.tan(d * D2R);
+
+// Parts
+const fus = (st, o = {}) => ({ t: 'loft', st, fine: 0.5, ...o });
+const pod = (st, z, o = {}) => ({ t: 'loft', st, z, mirror: true, ...o });
+const canopy = (st, o = {}) => ({ t: 'loft', st, mat: 'glass', ...o });
+const wing = (name, sec, o = {}) => ({ t: 'panel', name, sec, mirror: true, ...o });
+const surf = (sec, o = {}) => ({ t: 'panel', sec, mirror: true, ...o });
+const noz = (o) => ({ t: 'noz', ...o });
+
+// Trapezoidal panel from root LE (s, y, z), root chord, tip z, LE sweep, tip chord, dihedral.
+const trap = (s, y, z, cr, zt, sweep, ct, dih = 0, t = 0.05, t2 = t) =>
+  [[s, y, z, cr, t], [s + tan(sweep) * (zt - z), y + tan(dih) * (zt - z), zt, ct, t2]];
+// Fin from root LE, height along the fin, LE sweep, tip chord, cant from vertical (outward).
+const vfin = (s, y, z, cr, h, sweep, ct, cant = 0, t = 0.05) =>
+  [[s, y, z, cr, t], [s + tan(sweep) * h, y + h * Math.cos(cant * D2R), z + h * Math.sin(cant * D2R), ct, t]];
+// Circular cross-section helper for lofts: [s, r, yc]
+const ring = (s, r, y = 0) => [s, r, r, r, y, 2];
+
+const A = o => AIRCRAFT.push(o);
+
+// =====================================================================================
+A({
+  key: 'f16', name: 'F-16C Fighting Falcon', short: 'F-16C', variant: 'Block 50', nick: 'Viper',
+  role: 'Multirole fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'General Dynamics / Lockheed Martin',
+  first: 1974, intro: 1978, built: '4,600+', status: 'In service with 25 air forces', crew: 1,
+  paint: '#8e979e', paint2: '#737d86',
+  dims: { len: 15.06, span: 9.96, height: 4.88, wingArea: 27.87 },
+  wt: { empty: 8570, mtow: 19187, fuel: 3200 },
+  eng: { n: 1, name: 'General Electric F110-GE-129', type: 'Afterburning turbofan', dry: 76.3, wet: 131.6, zones: 5, bypass: 0.76 },
+  perf: { mach: 2.05, vmax: 2120, ceil: 15240, radius: 550, ferry: 4220, g: '+9 / -3', roc: 254 },
+  gun: 'M61A1 Vulcan 20 mm, 511 rounds', hard: '9 (2 wingtip, 6 underwing, 1 centreline) plus 2 chin pod mounts', payload: 7700,
+  fact: 'The first fighter built around fly-by-wire and a reclined seat that helps the pilot take 9 g. Its single engine breathes through the chin intake under the cockpit.',
+  geo: [
+    fus([ring(0, 0.02), ring(0.8, 0.28), [2.0, 0.5, 0.48, 0.45, 0.02, 2], [3.3, 0.62, 0.6, 0.55, 0.05, 2.2], [5.0, 0.72, 0.65, 0.75, 0, 2.3], [6.5, 0.9, 0.7, 0.9, 0, 2.4], [8.5, 0.95, 0.65, 0.9, 0, 2.4], [11, 0.85, 0.6, 0.8, 0, 2.3], [13.2, 0.7, 0.55, 0.65, 0, 2], [14.2, 0.6, 0.5, 0.55, 0, 2]], { capF: 'dark' }),
+    fus([[4.6, 0.55, 0.32, 0.4, -0.98, 2.6], [6.0, 0.56, 0.4, 0.42, -0.9, 2.6], [8.0, 0.5, 0.35, 0.3, -0.62, 2.2], [9.0, 0.3, 0.2, 0.1, -0.45, 2]], { capF: 'hole', fine: 0 }),
+    canopy([[2.6, 0.05, 0.02, 0.02, 0.5], [3.4, 0.36, 0.34, 0.05, 0.58], [4.6, 0.42, 0.42, 0.05, 0.63], [6.0, 0.35, 0.3, 0.05, 0.6], [7.0, 0.08, 0.05, 0.02, 0.58]]),
+    fus([[6.2, 0.35, 0.25, 0.1, 0.55, 2], [9, 0.45, 0.22, 0.1, 0.55, 2.4], [12.5, 0.3, 0.12, 0.1, 0.5, 2], [13.6, 0.1, 0.05, 0.05, 0.45, 2]], { fine: 0 }),
+    wing('wing', [[4.6, -0.1, 0.72, 7.5, 0.025], [7.2, -0.1, 1.45, 5.0, 0.04], [7.2 + tan(40) * 3.27, -0.1, 4.72, 1.5, 0.04]]),
+    surf(trap(12.3, -0.1, 0.65, 2.6, 2.79, 40, 0.9, -10, 0.05)),
+    { t: 'panel', sec: vfin(10.4, 0.5, 0, 3.4, 2.6, 47, 1.2, 0, 0.05) },
+    surf(vfin(11.8, -0.7, 0.55, 1.4, 0.55, 45, 0.7, 150, 0.05)),
+    noz({ s: 15.06, r: 0.52, len: 1.1 }),
+  ],
+  stations: [
+    { id: '1/9', label: 'Wingtip', on: 'wing', f: 1, c: 0.45, kind: 'rail', mirror: true, max: 193 },
+    { id: '2/8', label: 'Outboard', on: 'wing', f: 0.8, c: 0.38, mirror: true, max: 204, fixed: true, drop: 0.25 },
+    { id: '3/7', label: 'Midboard', on: 'wing', f: 0.58, c: 0.38, mirror: true, max: 1587, fixed: true },
+    { id: '4/6', label: 'Inboard (wet)', on: 'wing', f: 0.37, c: 0.38, mirror: true, max: 2041, fixed: true },
+    { id: '5', label: 'Centreline (wet)', at: [8.4, -0.92, 0], max: 1000, drop: 0.25 },
+    { id: '5L', label: 'Left chin', at: [6.5, -0.98, -0.55], max: 250, drop: 0.12 },
+    { id: '5R', label: 'Right chin', at: [6.5, -0.98, 0.55], max: 250, drop: 0.12 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Four AMRAAMs, two Sidewinders, two wing tanks.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'AIM-120C', '4/6': 'Tank 370' } },
+    { name: 'Precision strike', note: 'Two 2,000 lb JDAMs with targeting and jamming pods.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'GBU-31', '4/6': 'Tank 370', '5': 'ALQ-184', '5R': 'Sniper' } },
+    { name: 'SEAD (Wild Weasel)', note: 'Block 50 speciality: HARMs cued by the HARM Targeting System.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'AGM-88', '4/6': 'Tank 370', '5': 'ALQ-184', '5L': 'HTS' } },
+    { name: 'Close air support', note: 'Six Mk 82s on triple ejector racks and laser-guided bombs.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': ['Mk 82', 3], '4/6': 'GBU-12', '5': 'Tank 300', '5R': 'Sniper' } },
+    { name: 'Clean', note: 'Tip missiles only.', set: { '1/9': 'AIM-9X' } },
+  ],
+});
+
+// =====================================================================================
+A({
+  key: 'f22', name: 'F-22A Raptor', short: 'F-22A', nick: 'Raptor', variant: 'Block 30/35',
+  role: 'Stealth air superiority fighter', cat: 'Fighter', gen: 5, country: 'United States', maker: 'Lockheed Martin / Boeing',
+  first: 1997, intro: 2005, built: '195 (8 test, 187 production)', status: 'In service, US Air Force only', crew: 1,
+  paint: '#8b939a', paint2: '#737c84',
+  dims: { len: 18.92, span: 13.56, height: 5.08, wingArea: 78.04 },
+  wt: { empty: 19700, mtow: 38000, fuel: 8200 },
+  eng: { n: 2, name: 'Pratt & Whitney F119-PW-100', type: 'Afterburning turbofan', dry: 116, wet: 156, bypass: 0.3, tv: '2D nozzles, pitch ±20°' },
+  perf: { mach: 2.25, vmax: 2414, cruise: 'Supercruise Mach 1.82 without afterburner', ceil: 19812, radius: 852, ferry: 2960, g: '+9 / -3' },
+  gun: 'M61A2 Vulcan 20 mm, 480 rounds', hard: '3 internal bays (main, two side), 4 underwing', payload: 9100,
+  fact: 'The first fighter to combine stealth, supercruise and thrust vectoring. Its weapons ride in three internal bays, and the AMRAAMs are pushed clear of the airflow on hydraulic launchers before they fire.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, -0.1, 2], [1.0, 0.36, 0.3, 0.26, -0.06, 1.6], [2.4, 0.62, 0.48, 0.42, 0, 1.6], [3.8, 0.8, 0.6, 0.52, 0.04, 1.6], [5.6, 1.15, 0.68, 0.58, 0.04, 1.7], [7.4, 1.95, 0.7, 0.6, 0, 1.8], [10.5, 2.25, 0.72, 0.6, 0, 1.9], [13.5, 2.05, 0.62, 0.52, 0, 1.9], [16.2, 1.6, 0.46, 0.42, 0, 2.1], [18.0, 1.3, 0.36, 0.32, 0, 2.4]], { capF: 'dark' }),
+    pod([[5.3, 0.5, 0.55, 0.55, -0.15, 1.5], [6.8, 0.6, 0.6, 0.58, -0.1, 1.7], [8.6, 0.5, 0.5, 0.5, -0.05, 2]], 1.55, { capF: 'hole' }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.5], [3.6, 0.4, 0.42, 0.05, 0.56], [5.0, 0.45, 0.5, 0.05, 0.6], [6.6, 0.32, 0.34, 0.05, 0.62], [7.8, 0.06, 0.06, 0.02, 0.62]], { mat: 'gold' }),
+    wing('wing', trap(7.8, -0.05, 1.9, 8.4, 6.78, 42, 1.9, -3.25, 0.045)),
+    surf(trap(15.3, -0.15, 1.7, 3.4, 4.45, 42, 1.3, 0, 0.04)),
+    surf(vfin(13.0, 0.55, 1.45, 3.9, 2.9, 23, 1.4, 28, 0.045)),
+    noz({ shape: '2d', s: 18.92, z: 0.62, w: 0.52, h: 0.34, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'MB-o', label: 'Main bay, outer', at: [9.4, -0.1, 0.62], kind: 'bay', mirror: true, bay: { len: 4.6, w: 0.8, h: 0.55 } },
+    { id: 'MB-i', label: 'Main bay, inner', at: [9.4, -0.1, 0.2], kind: 'bay', mirror: true, bay: { len: 4.4, w: 0.4, h: 0.45, doors: false } },
+    { id: 'SB', label: 'Side bay', at: [8.0, -0.1, 1.62], kind: 'bay', mirror: true, bay: { len: 3.3, w: 0.42, h: 0.45 } },
+    { id: 'W1', label: 'Inboard wing', on: 'wing', f: 0.3, c: 0.4, mirror: true, max: 2270 },
+    { id: 'W2', label: 'Outboard wing', on: 'wing', f: 0.58, c: 0.4, mirror: true, max: 2270 },
+  ],
+  loadouts: [
+    { name: 'Air dominance', note: 'Six AMRAAMs in the main bay, a Sidewinder in each side bay. Clean and stealthy.', set: { 'MB-o': ['AIM-120C', 2], 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Strike (JDAM)', note: 'Two 1,000 lb JDAMs plus two AMRAAMs and two Sidewinders.', set: { 'MB-o': 'GBU-32', 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Strike (SDB)', note: 'Eight Small Diameter Bombs on two BRU-61 racks.', set: { 'MB-o': 'Rack SDB', 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Ferry', note: 'Four 600 gal tanks on the wing pylons for deployments. Not stealthy.', set: { W1: 'Tank 600', W2: 'Tank 600', 'MB-o': ['AIM-120C', 2], 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+  ],
+});
+
+A({
+  key: 'f35a', name: 'F-35A Lightning II', short: 'F-35A', nick: 'Lightning II', variant: 'Block 3F / 4',
+  role: 'Stealth multirole fighter', cat: 'Fighter', gen: 5, country: 'United States', maker: 'Lockheed Martin',
+  first: 2006, intro: 2016, built: '1,100+ (all variants)', status: 'In production, 19 nations', crew: 1,
+  paint: '#7f878d', paint2: '#6b7379',
+  dims: { len: 15.7, span: 10.7, height: 4.38, wingArea: 42.7 },
+  wt: { empty: 13290, mtow: 31800, fuel: 8278 },
+  eng: { n: 1, name: 'Pratt & Whitney F135-PW-100', type: 'Afterburning turbofan', dry: 125, wet: 191, bypass: 0.57 },
+  perf: { mach: 1.6, vmax: 1930, ceil: 15240, radius: 1093, ferry: 2800, g: '+9 / -3' },
+  gun: 'GAU-22/A 25 mm, 180 rounds (internal)', hard: '4 internal bay stations, 6 underwing', payload: 8160,
+  fact: 'The F135 is the most powerful engine ever fitted to a fighter. Two internal bays each hold one air-to-ground weapon up to 2,000 lb and one AMRAAM on the door.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, -0.05, 2], [1.0, 0.38, 0.32, 0.3, 0, 1.7], [2.4, 0.66, 0.52, 0.5, 0.05, 1.7], [4.0, 0.95, 0.7, 0.6, 0.08, 1.8], [6.0, 1.65, 0.8, 0.72, 0.02, 1.9], [9.0, 1.85, 0.8, 0.72, 0, 2], [11.5, 1.6, 0.75, 0.65, 0, 2.1], [13.6, 1.05, 0.62, 0.55, 0, 2.2], [14.6, 0.75, 0.58, 0.55, 0, 2]], { capF: 'dark' }),
+    pod([[4.4, 0.42, 0.48, 0.45, 0.05, 1.6], [5.6, 0.5, 0.55, 0.5, 0.02, 1.8], [7.4, 0.4, 0.45, 0.4, 0, 2]], 1.2, { capF: 'hole' }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.38, 0.42, 0.05, 0.62], [4.6, 0.45, 0.5, 0.05, 0.7], [6.2, 0.3, 0.3, 0.05, 0.72], [7.2, 0.05, 0.05, 0.02, 0.7]], { mat: 'gold' }),
+    wing('wing', trap(6.6, -0.05, 1.6, 6.2, 5.35, 34, 2.2, -2, 0.05)),
+    surf(trap(12.6, -0.05, 1.2, 3.0, 3.45, 34, 1.1, 0, 0.04)),
+    surf(vfin(10.4, 0.6, 1.05, 3.0, 2.3, 35, 1.2, 22, 0.045)),
+    noz({ s: 15.7, r: 0.56, len: 1.4 }),
+  ],
+  stations: [
+    { id: 'Bay A/G', label: 'Bay, air-to-ground', at: [8.3, -0.15, 0.62], kind: 'bay', mirror: true, max: 1000, bay: { len: 4.3, w: 0.8, h: 0.6 } },
+    { id: 'Bay A/A', label: 'Bay door, air-to-air', at: [8.3, -0.15, 0.18], kind: 'bay', mirror: true, max: 160, bay: { len: 4.0, w: 0.36, h: 0.45, doors: false } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.22, c: 0.4, mirror: true, max: 2270 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.5, c: 0.4, mirror: true, max: 1100 },
+    { id: 'W3', label: 'Outboard', on: 'wing', f: 0.85, c: 0.4, mirror: true, max: 150, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Stealth strike', note: 'Two 2,000 lb JDAMs and two AMRAAMs, all internal.', set: { 'Bay A/G': 'GBU-31', 'Bay A/A': 'AIM-120C' } },
+    { name: 'Stealth air-to-air', note: 'Four AMRAAMs internal.', set: { 'Bay A/G': 'AIM-120D', 'Bay A/A': 'AIM-120D' } },
+    { name: 'Small Diameter Bombs', note: 'Eight SDBs on BRU-61 racks and two AMRAAMs.', set: { 'Bay A/G': 'Rack SDB', 'Bay A/A': 'AIM-120C' } },
+    { name: 'Beast mode', note: 'Stealth traded for payload: six 2,000 lb JDAMs, two AMRAAMs, two Sidewinders.', set: { 'Bay A/G': 'GBU-31', 'Bay A/A': 'AIM-120C', W1: 'GBU-31', W2: 'GBU-31', W3: 'AIM-9X' } },
+    { name: 'Nuclear', note: 'Two B61-12 in the bays. The F-35A was certified for it in 2024.', set: { 'Bay A/G': 'B61', 'Bay A/A': 'AIM-120C' } },
+  ],
+});
+
+A({
+  key: 'f15e', name: 'F-15E Strike Eagle', short: 'F-15E', nick: 'Mudhen', variant: '',
+  role: 'Dual-role strike fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'McDonnell Douglas / Boeing',
+  first: 1986, intro: 1989, built: '420+ (incl. export)', status: 'In service', crew: 2,
+  paint: '#6f767b', paint2: '#5d6468',
+  dims: { len: 19.43, span: 13.05, height: 5.63, wingArea: 56.5 },
+  wt: { empty: 14300, mtow: 36700, fuel: 5952 },
+  eng: { n: 2, name: 'Pratt & Whitney F100-PW-229', type: 'Afterburning turbofan', dry: 79.2, wet: 129.4, zones: 5, bypass: 0.36 },
+  perf: { mach: 2.5, vmax: 2655, ceil: 18200, radius: 1270, ferry: 3900, g: '+9 / -3' },
+  gun: 'M61A1 Vulcan 20 mm, 510 rounds', hard: '2 wing pylons (with 4 missile rails), 12 conformal tank stations, centreline, 2 pod mounts', payload: 10400,
+  fact: 'A two-seat strike version of the air superiority Eagle. Conformal fuel tanks hug the intakes and carry bombs in rows, so the wing pylons stay free for fuel and missiles.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.42, 0.42, 0, 2], [2.8, 0.62, 0.62, 0.6, 0.05, 2], [4.5, 0.72, 0.72, 0.62, 0.12, 2.2], [6.5, 0.8, 0.75, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.55, 0.5, 0, 3], [15.5, 1.35, 0.5, 0.5, 0, 3], [17.8, 1.25, 0.45, 0.45, 0, 3]], { capF: 'dark' }),
+    pod([[5.6, 0.55, 0.62, 0.62, -0.2, 4], [7, 0.58, 0.62, 0.62, -0.15, 4], [10, 0.55, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.45, { capF: 'hole' }),
+    pod([[7.5, 0.1, 0.1, 0.1, -0.5, 2], [8.5, 0.42, 0.42, 0.42, -0.5, 2.5], [13, 0.42, 0.42, 0.42, -0.45, 2.5], [14.5, 0.08, 0.1, 0.1, -0.4, 2]], 1.75),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.42, 0.42, 0.05, 0.8], [5.5, 0.48, 0.52, 0.05, 0.86], [7.2, 0.46, 0.5, 0.05, 0.86], [8.6, 0.3, 0.25, 0.05, 0.82], [9.6, 0.08, 0.05, 0.02, 0.76]]),
+    wing('wing', trap(8.8, 0.3, 1.9, 6.4, 6.52, 45, 2.0, -1, 0.05)),
+    surf(trap(15.8, 0.1, 1.9, 3.2, 4.3, 50, 1.3, 0, 0.04)),
+    surf(vfin(14.3, 0.5, 1.25, 3.4, 3.0, 36, 1.2, 2, 0.045)),
+    noz({ s: 19.43, z: 0.62, r: 0.52, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: 'W2/8', label: 'Wing pylon + rails', on: 'wing', f: 0.36, c: 0.38, mirror: true, max: 2270, fixed: true, drop: 0.45 },
+    { id: 'CFT-o', label: 'Conformal, outer row', at: [11.3, -0.95, 2.02], kind: 'conf', mirror: true },
+    { id: 'CFT-i', label: 'Conformal, inner row', at: [11.3, -0.95, 1.48], kind: 'conf', mirror: true },
+    { id: 'CL', label: 'Centreline', at: [11.5, -0.62, 0], max: 2270, drop: 0.3 },
+    { id: 'LP', label: 'Left intake pod', at: [7.0, -0.85, 1.45], side: -1, drop: 0.12 },
+    { id: 'RP', label: 'Right intake pod', at: [7.0, -0.85, 1.45], drop: 0.12 },
+  ],
+  loadouts: [
+    { name: 'Heavy strike', note: 'Four 2,000 lb JDAMs on the conformal tanks, four AMRAAMs, targeting and navigation pods.', set: { 'CFT-o': 'GBU-31', 'CFT-i': 'GBU-31', 'W2/8': ['AIM-120C', 2], CL: 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Twelve Mk 82', note: 'Classic interdiction load, six bombs on each conformal tank.', set: { 'CFT-o': ['Mk 82', 3], 'CFT-i': ['Mk 82', 3], 'W2/8': 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Small Diameter Bombs', note: 'Twenty-four SDBs on six BRU-61 racks.', set: { 'CFT-o': ['Rack SDB', 2], 'CFT-i': 'Rack SDB', 'W2/8': ['AIM-120C', 2], CL: 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Air-to-air', note: 'Four AMRAAMs and two Sidewinders on the wing rails.', set: { 'W2/8': ['AIM-120C', 2], 'CFT-o': 'AIM-9X', CL: 'Tank 610' } },
+    { name: 'Ferry', note: 'Three 610 gal tanks: 5,500 kg of extra fuel.', set: { 'W2/8': 'Tank 610', CL: 'Tank 610' } },
+  ],
+});
+
+A({
+  key: 'fa18e', name: 'F/A-18E Super Hornet', short: 'F/A-18E', nick: 'Rhino', variant: 'Block III',
+  role: 'Carrier-based multirole fighter', cat: 'Fighter', gen: 4.5, country: 'United States', maker: 'Boeing',
+  first: 1995, intro: 2001, built: '630+ (E/F/G)', status: 'In service', crew: 1,
+  paint: '#8b9399', paint2: '#788086',
+  dims: { len: 18.31, span: 13.62, height: 4.88, wingArea: 46.45 },
+  wt: { empty: 14552, mtow: 29937, fuel: 6531 },
+  eng: { n: 2, name: 'General Electric F414-GE-400', type: 'Afterburning turbofan', dry: 62.3, wet: 97.9, bypass: 0.25 },
+  perf: { mach: 1.8, vmax: 1915, ceil: 15000, radius: 722, ferry: 3330, g: '+7.6 / -3' },
+  gun: 'M61A2 Vulcan 20 mm, 412 rounds', hard: '11 (2 wingtip, 6 underwing, 2 fuselage, 1 centreline)', payload: 8050,
+  fact: 'Bigger than the original Hornet in almost every dimension, with caret intakes and outward-angled pylons that stop released stores from striking the aircraft.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.45, 0.45, 0.42, 0, 2], [3.0, 0.68, 0.66, 0.6, 0.08, 2.2], [5.0, 0.8, 0.72, 0.6, 0.15, 2.3], [7.5, 1.25, 0.7, 0.6, 0.05, 2.6], [11, 1.4, 0.62, 0.6, 0, 2.8], [14.5, 1.25, 0.55, 0.55, 0, 2.8], [16.8, 1.05, 0.45, 0.45, 0, 2.6], [17.6, 0.9, 0.42, 0.42, 0, 2.4]], { capF: 'dark' }),
+    pod([[7.0, 0.45, 0.42, 0.5, -0.5, 1.8], [8.5, 0.5, 0.45, 0.5, -0.42, 2.5], [11, 0.4, 0.4, 0.4, -0.3, 2]], 1.3, { capF: 'hole' }),
+    canopy([[3.2, 0.05, 0.02, 0.02, 0.72], [4.0, 0.4, 0.4, 0.05, 0.8], [5.6, 0.45, 0.5, 0.05, 0.86], [7.2, 0.32, 0.3, 0.05, 0.84], [8.6, 0.06, 0.05, 0.02, 0.76]]),
+    wing('wing', [[4.2, 0.25, 0.7, 9.0, 0.02], [8.4, 0.15, 2.2, 5.0, 0.045], [10.55, 0.1, 6.25, 1.7, 0.04]]),
+    surf(trap(15.2, 0.0, 1.2, 3.1, 3.45, 40, 1.3, -2, 0.04)),
+    surf(vfin(12.2, 0.55, 1.0, 3.3, 2.8, 40, 1.4, 20, 0.045)),
+    noz({ s: 18.31, z: 0.55, r: 0.5, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: '1/11', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 227 },
+    { id: '2/10', label: 'Outboard', on: 'wing', f: 0.78, c: 0.4, mirror: true, max: 520, fixed: true },
+    { id: '3/9', label: 'Midboard', on: 'wing', f: 0.56, c: 0.4, mirror: true, max: 1150, fixed: true },
+    { id: '4/8', label: 'Inboard (wet)', on: 'wing', f: 0.34, c: 0.4, mirror: true, max: 1590, fixed: true },
+    { id: '5/7', label: 'Fuselage', at: [11.0, -0.85, 0.9], kind: 'conf', mirror: true, max: 350 },
+    { id: '6', label: 'Centreline (wet)', at: [11.2, -0.62, 0], max: 1100, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Strike', note: 'Two 2,000 lb JDAMs, targeting pod on the left fuselage station.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120C', '3/9': 'GBU-31', '4/8': 'Tank 480', '5/7': 'AIM-120C', '6': 'ATFLIR' } },
+    { name: 'Fleet air defence', note: 'Eight AMRAAMs and two Sidewinders.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120D', '3/9': 'AIM-120D', '4/8': 'AIM-120D', '5/7': 'AIM-120D', '6': 'Tank 480' } },
+    { name: 'Anti-ship', note: 'Two Harpoons with three tanks.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120C', '3/9': 'AGM-84', '4/8': 'Tank 480', '6': 'Tank 480' } },
+    { name: 'SEAD', note: 'Four HARMs.', set: { '1/11': 'AIM-9X', '2/10': 'AGM-88', '3/9': 'AGM-88', '4/8': 'Tank 480', '5/7': 'AIM-120C' } },
+    { name: 'Tanker (5 tanks)', note: 'Buddy refuelling: four wing tanks and the centreline store.', set: { '1/11': 'AIM-9X', '3/9': 'Tank 480', '4/8': 'Tank 480', '6': 'Tank 480' } },
+  ],
+});
+
+A({
+  key: 'f14d', name: 'F-14D Super Tomcat', short: 'F-14D', nick: 'Tomcat', variant: '',
+  role: 'Carrier-based fleet defence fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'Grumman',
+  first: 1970, intro: 1974, built: '712 (all variants)', status: 'Retired by US Navy 2006; F-14A still flown by Iran', crew: 2,
+  paint: '#9aa1a6', paint2: '#838a90',
+  dims: { len: 19.1, span: 19.55, spanSwept: 11.58, height: 4.88, wingArea: 54.5 },
+  wt: { empty: 19838, mtow: 33720, fuel: 7348 },
+  eng: { n: 2, name: 'General Electric F110-GE-400', type: 'Afterburning turbofan', dry: 61.4, wet: 124.7, bypass: 0.87 },
+  sweep: { def: 20, min: 20, max: 68 },
+  perf: { mach: 2.34, vmax: 2485, ceil: 16150, radius: 926, ferry: 2960, g: '+7.5 / -3' },
+  gun: 'M61A1 Vulcan 20 mm, 675 rounds', hard: '10 (4 tunnel, 2 glove, 2 glove rails, 2 nacelle)', payload: 6600,
+  fact: 'The wings sweep automatically from 20° to 68° with speed. Its AWG-9 radar and Phoenix missiles were built to stop Soviet bomber raids on the carrier from more than 150 km away.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.5, 0.45, 0, 2], [3.2, 0.72, 0.7, 0.62, 0.1, 2.2], [5.0, 0.82, 0.78, 0.62, 0.18, 2.3], [7.0, 0.95, 0.78, 0.6, 0.12, 2.5], [9.5, 1.1, 0.55, 0.45, 0.05, 3], [13, 1.0, 0.35, 0.35, 0.05, 3], [16.5, 0.75, 0.25, 0.25, 0.05, 3], [18.4, 0.4, 0.15, 0.15, 0.05, 2]], { capF: 'dark' }),
+    fus([[7.5, 1.2, 0.3, 0.3, 0.05, 4], [10, 2.3, 0.3, 0.3, 0, 4], [14, 2.3, 0.3, 0.3, 0, 4], [17, 1.9, 0.25, 0.25, 0, 4], [17.8, 1.5, 0.2, 0.2, 0, 3]]),
+    pod([[7.2, 0.55, 0.62, 0.62, -0.3, 4], [9, 0.6, 0.65, 0.65, -0.3, 3.5], [13, 0.62, 0.6, 0.6, -0.2, 2.5], [16.8, 0.55, 0.55, 0.55, -0.15, 2], [17.9, 0.5, 0.5, 0.5, -0.1, 2]], 1.45, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.45, 0.05, 0.86], [6.0, 0.5, 0.55, 0.05, 0.92], [7.8, 0.45, 0.48, 0.05, 0.92], [9.2, 0.25, 0.2, 0.05, 0.86], [10.2, 0.05, 0.05, 0.02, 0.8]]),
+    surf([[6.5, 0.1, 1.2, 6.0, 0.03], [9.8, 0.1, 2.7, 3.6, 0.04]]),
+    wing('wing', [[9.9, 0.1, 2.7, 3.7, 0.05], [12.47, 0.1, 9.77, 1.4, 0.05]], { pivot: [11.4, 2.7], sweep: { def: 20 } }),
+    surf(trap(16.0, -0.05, 1.9, 3.2, 4.98, 50, 1.1, -2, 0.04)),
+    surf(vfin(13.3, 0.55, 1.45, 3.6, 2.9, 43, 1.3, 5, 0.045)),
+    noz({ s: 19.0, z: 1.45, y: -0.12, r: 0.55, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: '1B/8B', label: 'Glove pylon', at: [9.2, -0.35, 2.3], mirror: true, max: 1000, drop: 0.35 },
+    { id: '1A/8A', label: 'Glove shoulder rail', at: [8.8, -0.25, 2.75], kind: 'rail', mirror: true, max: 90 },
+    { id: '3/6', label: 'Tunnel, forward', at: [10.4, -0.32, 0.55], kind: 'semi', mirror: true, max: 1000 },
+    { id: '4/5', label: 'Tunnel, aft', at: [14.2, -0.32, 0.55], kind: 'semi', mirror: true, max: 1000 },
+    { id: '2/7', label: 'Nacelle (tank)', at: [11.6, -0.95, 1.45], mirror: true, max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Six Phoenix', note: 'The famous fleet-defence load. Too heavy to land back on the carrier with all six.', set: { '1B/8B': 'AIM-54C', '3/6': 'AIM-54C', '4/5': 'AIM-54C', '2/7': 'Tank 300' } },
+    { name: 'Combat air patrol', note: 'Mixed long, medium and short range missiles.', set: { '1B/8B': 'AIM-54C', '1A/8A': 'AIM-9M', '3/6': 'AIM-7M', '4/5': 'AIM-54C', '2/7': 'Tank 300' } },
+    { name: 'Bombcat', note: 'Late-career strike role with laser-guided bombs.', set: { '1B/8B': 'AIM-7M', '1A/8A': 'AIM-9M', '3/6': 'GBU-12', '4/5': 'GBU-12', '2/7': 'Tank 300' } },
+    { name: 'Clean', note: 'Tanks only.', set: { '2/7': 'Tank 300' } },
+  ],
+});
+
+A({
+  key: 'f4e', name: 'F-4E Phantom II', short: 'F-4E', nick: 'Phantom', variant: '',
+  role: 'Fighter-bomber', cat: 'Fighter', gen: 3, country: 'United States', maker: 'McDonnell Douglas',
+  first: 1958, intro: 1967, built: '5,195 (all variants)', status: 'Retired by the US; still flown by a few air forces', crew: 2,
+  paint: '#7d8468', paint2: '#5f6650',
+  dims: { len: 19.2, span: 11.7, height: 5.0, wingArea: 49.2 },
+  wt: { empty: 13757, mtow: 28030, fuel: 5600 },
+  eng: { n: 2, name: 'General Electric J79-GE-17A', type: 'Afterburning turbojet', dry: 52.8, wet: 79.6, bypass: 0, sfc: [0.84, 1.97] },
+  perf: { mach: 2.23, vmax: 2370, ceil: 18300, radius: 680, ferry: 2600, g: '+7.3' },
+  gun: 'M61A1 Vulcan 20 mm, 640 rounds (under the nose)', hard: '9 (4 semi-recessed, 4 wing, 1 centreline)', payload: 8480,
+  fact: 'Built as a Navy interceptor, it became the West\'s standard fighter-bomber of the 1960s and 70s. The E added the internal gun that Vietnam showed was missing. Note the upturned outer wings and drooping tail.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.42, 0.42, 0.42, 0, 2], [3.2, 0.62, 0.62, 0.6, 0.05, 2.1], [5.0, 0.72, 0.72, 0.6, 0.1, 2.2], [7.0, 0.8, 0.75, 0.6, 0.08, 2.3], [10, 1.25, 0.7, 0.62, 0, 2.6], [13.5, 1.2, 0.62, 0.55, 0, 2.5], [16, 0.8, 0.55, 0.45, 0.1, 2.2], [18.4, 0.35, 0.4, 0.25, 0.25, 2], [19.2, 0.1, 0.15, 0.1, 0.3, 2]], { capF: 'dark' }),
+    pod([[5.6, 0.35, 0.6, 0.6, 0, 3], [7.5, 0.45, 0.62, 0.62, -0.05, 3], [11, 0.45, 0.55, 0.55, -0.05, 2.5]], 1.1, { capF: 'hole' }),
+    canopy([[3.6, 0.05, 0.02, 0.02, 0.62], [4.4, 0.42, 0.42, 0.05, 0.7], [6, 0.48, 0.5, 0.05, 0.76], [8.4, 0.46, 0.46, 0.05, 0.76], [10.2, 0.3, 0.25, 0.05, 0.7], [11, 0.06, 0.05, 0.02, 0.66]]),
+    wing('wing', trap(8.8, -0.25, 1.1, 6.6, 3.9, 45, 4.3, 0, 0.05)),
+    surf([[11.3, -0.25, 3.9, 4.5, 0.045], [13.25, 0.16, 5.85, 1.6, 0.04]]),
+    surf(trap(16.8, 0.35, 0.3, 2.8, 2.7, 45, 1.0, -23, 0.04)),
+    { t: 'panel', sec: vfin(14.6, 0.5, 0, 3.7, 2.45, 55, 1.0, 0, 0.045) },
+    noz({ s: 17.9, z: 0.55, y: -0.2, r: 0.45, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: '1/9', label: 'Outboard wing', on: 'wing', f: 0.85, c: 0.35, mirror: true, max: 1370, fixed: true },
+    { id: '2/8', label: 'Inboard wing', on: 'wing', f: 0.35, c: 0.35, mirror: true, max: 1370, fixed: true },
+    { id: '3/7', label: 'Sparrow well, forward', at: [9.4, -0.62, 0.72], kind: 'semi', mirror: true, max: 231 },
+    { id: '4/6', label: 'Sparrow well, aft', at: [13.6, -0.58, 0.68], kind: 'semi', mirror: true, max: 231 },
+    { id: '5', label: 'Centreline', at: [11.4, -0.72, 0], max: 2270, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'MiGCAP', note: 'Four Sparrows, four Sidewinders, three tanks.', set: { '3/7': 'AIM-7M', '4/6': 'AIM-7M', '2/8': ['AIM-9M', 2], '1/9': 'Tank 370', '5': 'Tank 600' } },
+    { name: 'Iron bombs', note: 'Twelve Mk 82s on triple ejector racks, Sparrows for self defence.', set: { '1/9': ['Mk 82', 3], '2/8': ['Mk 82', 3], '4/6': 'AIM-7M', '5': 'Tank 600' } },
+    { name: 'Laser-guided', note: 'Two 2,000 lb Paveways with a jamming pod.', set: { '2/8': 'GBU-10', '1/9': 'Tank 370', '3/7': 'ALQ-184', '4/6': 'AIM-7M' } },
+    { name: 'Clean', note: '', set: {} },
+  ],
+});
+
+A({
+  key: 'su35', name: 'Su-35S Flanker-E', short: 'Su-35S', nick: 'Flanker-E', variant: '',
+  role: 'Air superiority and multirole fighter', cat: 'Fighter', gen: 4.5, country: 'Russia', maker: 'Sukhoi (United Aircraft Corporation)',
+  first: 2008, intro: 2014, built: '150+', status: 'In production', crew: 1,
+  paint: '#8c9aa6', paint2: '#5f6f7c',
+  dims: { len: 21.9, span: 15.3, height: 5.9, wingArea: 62 },
+  wt: { empty: 18400, mtow: 34500, fuel: 11500 },
+  eng: { n: 2, name: 'Saturn AL-41F1S (izdeliye 117S)', type: 'Afterburning turbofan', dry: 86.3, wet: 142.2, bypass: 0.59, tv: '3D, ±15° on canted axes' },
+  perf: { mach: 2.25, vmax: 2400, ceil: 18000, radius: 1580, ferry: 4500, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '12 (2 wingtip, 6 underwing, 2 tunnel, 2 nacelle)', payload: 8000,
+  fact: 'A deep rework of the Su-27 with thrust vectoring engines, no canards and a large internal fuel load. The engines are spaced far apart with a lifting tunnel between them that carries missiles.',
+  est: ['radius'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.48, 0.48, 0.45, 0, 2], [3.5, 0.72, 0.72, 0.62, 0.05, 2.1], [5.5, 0.82, 0.85, 0.62, 0.12, 2.2], [7.5, 0.95, 0.85, 0.55, 0.1, 2.4], [10, 1.4, 0.6, 0.35, 0, 3], [14, 1.5, 0.45, 0.3, 0, 3.5], [17.5, 0.9, 0.35, 0.3, 0, 3], [20.5, 0.35, 0.3, 0.3, 0, 2], [21.9, 0.2, 0.2, 0.2, 0, 2]], { capF: 'dark' }),
+    pod([[8.0, 0.55, 0.55, 0.62, -0.75, 4], [10, 0.62, 0.6, 0.62, -0.7, 3.5], [14, 0.62, 0.62, 0.62, -0.55, 2.5], [18, 0.6, 0.6, 0.6, -0.4, 2], [19.8, 0.58, 0.58, 0.58, -0.35, 2]], 1.25, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.82], [4.2, 0.42, 0.45, 0.05, 0.9], [5.8, 0.48, 0.55, 0.05, 0.96], [7.2, 0.4, 0.4, 0.05, 0.95], [8.8, 0.12, 0.08, 0.02, 0.9]]),
+    wing('wing', [[6.0, 0.05, 0.7, 10.0, 0.02], [9.3, 0.0, 2.6, 7.4, 0.04], [13.53, 0.0, 7.3, 1.8, 0.04]]),
+    surf(trap(18.0, -0.35, 2.3, 3.1, 5.0, 42, 1.2, 0, 0.04)),
+    surf(vfin(15.5, 0.2, 2.05, 3.6, 3.0, 40, 1.5, 0, 0.045)),
+    noz({ s: 21.0, z: 1.25, y: -0.35, r: 0.58, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 100 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.8, c: 0.4, mirror: true, max: 300, fixed: true },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.6, c: 0.4, mirror: true, max: 1500, fixed: true },
+    { id: 'W3', label: 'Inboard', on: 'wing', f: 0.36, c: 0.4, mirror: true, max: 1500, fixed: true },
+    { id: 'Tunnel', label: 'Between engines', at: [13.5, -0.35, 0.42], kind: 'conf', mirror: true, max: 700 },
+    { id: 'Nac', label: 'Under intake', at: [9.8, -1.38, 1.25], mirror: true, max: 700, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Twelve missiles: R-77s, R-27s and R-73s, with Khibiny jamming pods on the tips.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'R-77', W3: 'R-77', Tunnel: ['R-77', 2], Nac: 'R-27ER' } },
+    { name: 'SEAD', note: 'Kh-31P anti-radiation missiles.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'Kh-31P', W3: 'Kh-31P', Tunnel: 'R-77', Nac: 'R-77' } },
+    { name: 'Precision strike', note: 'Laser-guided KAB-500L bombs.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'R-77', W3: 'KAB-500L', Tunnel: ['KAB-500L', 1], Nac: 'R-77' } },
+    { name: 'Iron bombs', note: 'FAB-500s on the wing and tunnel.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'FAB-500', W3: 'FAB-500', Tunnel: ['FAB-500', 2] } },
+  ],
+});
+
+A({
+  key: 'su57', name: 'Su-57 Felon', short: 'Su-57', nick: 'Felon', variant: 'Series production',
+  role: 'Stealth multirole fighter', cat: 'Fighter', gen: 5, country: 'Russia', maker: 'Sukhoi (United Aircraft Corporation)',
+  first: 2010, intro: 2020, built: 'about 30', status: 'In low-rate production', crew: 1,
+  paint: '#8e979f', paint2: '#6d7780',
+  dims: { len: 20.1, span: 14.1, height: 4.6, wingArea: 78.8 },
+  wt: { empty: 18000, mtow: 35000, fuel: 10300 },
+  eng: { n: 2, name: 'Saturn AL-41F1 (izdeliye 117)', type: 'Afterburning turbofan', dry: 88.3, wet: 142.2, bypass: 0.59, tv: '3D, ±15°' },
+  perf: { mach: 2.0, vmax: 2135, cruise: 'Supercruise about Mach 1.3', ceil: 20000, radius: 1500, ferry: 4500, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '2 tandem main bays, 2 side bays, 6 external', payload: 10000,
+  fact: 'Russia\'s first stealth fighter keeps its missiles in two long tandem bays between widely spaced engines, with small side bays in the wing roots for dogfight missiles.',
+  est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'payload', 'ferry'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.42, 0.38, 0, 1.6], [3.6, 0.75, 0.65, 0.55, 0.05, 1.6], [5.6, 1.0, 0.75, 0.55, 0.08, 1.7], [7.5, 1.8, 0.65, 0.45, 0, 1.9], [11, 2.1, 0.55, 0.4, 0, 2.2], [15, 1.9, 0.45, 0.35, 0, 2.2], [18, 1.4, 0.35, 0.3, 0, 2.2], [19.5, 0.8, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
+    pod([[6.8, 0.55, 0.45, 0.6, -0.65, 3], [9, 0.62, 0.5, 0.62, -0.6, 3], [13, 0.62, 0.55, 0.62, -0.5, 2.5], [17, 0.58, 0.55, 0.58, -0.4, 2], [19.2, 0.56, 0.56, 0.56, -0.35, 2]], 1.35, { capF: 'hole' }),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.62], [3.8, 0.4, 0.42, 0.05, 0.7], [5.3, 0.45, 0.5, 0.05, 0.75], [6.8, 0.3, 0.3, 0.05, 0.75], [8.0, 0.05, 0.05, 0.02, 0.72]]),
+    wing('wing', [[5.5, 0.0, 1.1, 11.0, 0.02], [8.8, 0.0, 2.4, 8.2, 0.035], [13.8, 0.0, 6.9, 1.9, 0.04]]),
+    surf(trap(16.2, -0.2, 2.3, 3.2, 5.2, 45, 1.4, 0, 0.04)),
+    surf(vfin(14.6, 0.3, 1.75, 3.0, 2.4, 45, 1.3, 26, 0.04)),
+    noz({ s: 20.1, z: 1.35, y: -0.35, r: 0.58, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Bay 1', label: 'Forward main bay', at: [9.9, -0.3, 0], kind: 'bay', max: 1500, bay: { len: 4.4, w: 1.0, h: 0.7 } },
+    { id: 'Bay 2', label: 'Aft main bay', at: [14.6, -0.28, 0], kind: 'bay', max: 1500, bay: { len: 4.4, w: 1.0, h: 0.7 } },
+    { id: 'Side', label: 'Wing-root side bay', at: [7.6, -0.2, 1.7], kind: 'bay', mirror: true, bay: { len: 3.2, w: 0.4, h: 0.4 } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.35, c: 0.4, mirror: true, max: 1500 },
+    { id: 'W2', label: 'Outboard', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500 },
+  ],
+  loadouts: [
+    { name: 'Stealth air-to-air', note: 'Four R-77s in the main bays, an R-73 in each side bay.', set: { 'Bay 1': ['R-77', 2], 'Bay 2': ['R-77', 2], Side: 'R-73' } },
+    { name: 'Stealth strike', note: 'Two Kh-59MK2 cruise missiles plus R-77s.', set: { 'Bay 1': 'Kh-59MK2', 'Bay 2': ['R-77', 2], Side: 'R-73' } },
+    { name: 'Heavy external', note: 'Stealth traded for payload.', set: { 'Bay 1': ['R-77', 2], 'Bay 2': ['R-77', 2], Side: 'R-73', W1: 'Kh-31P', W2: 'R-77' } },
+  ],
+});
+
+A({
+  key: 'mig29', name: 'MiG-29A Fulcrum-A', short: 'MiG-29A', nick: 'Fulcrum', variant: '9.12',
+  role: 'Air superiority fighter', cat: 'Fighter', gen: 4, country: 'Soviet Union', maker: 'Mikoyan',
+  first: 1977, intro: 1983, built: '1,600+ (all variants)', status: 'In service with about 30 air forces', crew: 1,
+  paint: '#9aa3a8', paint2: '#7c8a90',
+  dims: { len: 17.32, span: 11.36, height: 4.73, wingArea: 38 },
+  wt: { empty: 11000, mtow: 18000, fuel: 3500 },
+  eng: { n: 2, name: 'Klimov RD-33', type: 'Afterburning turbofan', dry: 49.4, wet: 81.4, bypass: 0.49, sfc: [0.77, 2.05] },
+  perf: { mach: 2.25, vmax: 2400, ceil: 18000, radius: 700, ferry: 2100, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '7 (6 underwing, 1 centreline)', payload: 3500,
+  fact: 'Built for short, rough airfields: doors close the main intakes on the ground and air comes in through louvres on top of the wing roots, so the engines do not swallow debris.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.42, 0.42, 0.4, 0, 2], [3, 0.62, 0.62, 0.55, 0.05, 2.1], [4.8, 0.72, 0.75, 0.55, 0.12, 2.2], [6.6, 0.8, 0.7, 0.5, 0.1, 2.4], [9, 1.2, 0.5, 0.3, 0, 3], [12.5, 1.25, 0.4, 0.3, 0, 3.5], [15, 0.7, 0.3, 0.25, 0, 3], [16.6, 0.3, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
+    pod([[6.2, 0.45, 0.45, 0.55, -0.65, 4], [8, 0.52, 0.5, 0.55, -0.6, 3.5], [11.5, 0.52, 0.5, 0.52, -0.45, 2.5], [15, 0.5, 0.5, 0.5, -0.35, 2], [16.6, 0.48, 0.48, 0.48, -0.3, 2]], 1.05, { capF: 'hole' }),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.4, 0.42, 0.05, 0.8], [5.2, 0.44, 0.5, 0.05, 0.85], [6.5, 0.36, 0.36, 0.05, 0.85], [7.8, 0.1, 0.06, 0.02, 0.8]]),
+    wing('wing', [[4.6, 0.0, 0.6, 8.6, 0.02], [7.5, 0, 2.0, 5.4, 0.04], [10.8, 0, 5.68, 1.3, 0.04]]),
+    surf(trap(14.4, -0.3, 1.8, 2.6, 3.9, 50, 1.0, 0, 0.04)),
+    surf(vfin(12.2, 0.25, 1.55, 3.1, 2.4, 47, 1.2, 6, 0.045)),
+    noz({ s: 17.32, z: 1.05, y: -0.3, r: 0.5, len: 1.1, mirror: true }),
+  ],
+  stations: [
+    { id: '1/6', label: 'Outboard', on: 'wing', f: 0.84, c: 0.4, mirror: true, max: 100, fixed: true, drop: 0.2 },
+    { id: '2/5', label: 'Midboard', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500, fixed: true },
+    { id: '3/4', label: 'Inboard', on: 'wing', f: 0.38, c: 0.4, mirror: true, max: 500, fixed: true },
+    { id: '7', label: 'Centreline (between engines)', at: [11.0, -0.35, 0], max: 1500, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Two R-27ERs and four R-73s with the centreline tank.', set: { '1/6': 'R-73', '2/5': 'R-73', '3/4': 'R-27ER', '7': 'PTB-1500' } },
+    { name: 'Dogfight', note: 'Short-range missiles only.', set: { '1/6': 'R-60M', '2/5': 'R-73', '3/4': 'R-73' } },
+    { name: 'Ground attack', note: 'Four FAB-500s.', set: { '1/6': 'R-73', '2/5': 'FAB-500', '3/4': 'FAB-500', '7': 'PTB-1500' } },
+  ],
+});
+
+A({
+  key: 'mig31', name: 'MiG-31BM Foxhound', short: 'MiG-31BM', nick: 'Foxhound', variant: '',
+  role: 'Long-range interceptor', cat: 'Fighter', gen: 4, country: 'Soviet Union', maker: 'Mikoyan',
+  first: 1975, intro: 1981, built: '519', status: 'In service with Russia and Kazakhstan', crew: 2,
+  paint: '#a7aeb2', paint2: '#8b9398',
+  dims: { len: 22.62, span: 13.46, height: 6.15, wingArea: 61.6 },
+  wt: { empty: 21820, mtow: 46200, fuel: 16350 },
+  eng: { n: 2, name: 'Soloviev D-30F6', type: 'Afterburning turbofan', dry: 93.2, wet: 152, bypass: 0.57, sfc: [0.72, 1.9] },
+  perf: { mach: 2.83, vmax: 3000, cruise: 'Mach 2.35 sustained', ceil: 20600, radius: 720, ferry: 3300, g: '+5' },
+  gun: 'GSh-6-23 23 mm six-barrel, 260 rounds', hard: '4 belly (semi-recessed), 4 underwing', payload: 9000,
+  fact: 'Built from steel, titanium and aluminium to patrol the Arctic at Mach 2.35 against cruise missiles and SR-71s. The MiG-31K variant carries the Kinzhal ballistic missile on the centreline.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.8, 0.55, 0.55, 0.5, 0, 2], [3.8, 0.8, 0.8, 0.7, 0.05, 2.2], [5.5, 0.9, 0.95, 0.7, 0.12, 2.3], [7.5, 1.3, 0.85, 0.75, 0.05, 3], [10, 1.75, 0.75, 0.8, 0, 4], [15, 1.8, 0.7, 0.8, 0, 4], [19, 1.75, 0.65, 0.75, 0, 4], [21.8, 1.7, 0.6, 0.7, 0, 4]], { capF: 'dark' }),
+    pod([[7.2, 0.5, 0.85, 0.8, -0.05, 5], [9, 0.55, 0.85, 0.85, -0.05, 4], [11, 0.4, 0.7, 0.7, 0, 3]], 1.45, { capF: 'hole' }),
+    canopy([[3.8, 0.05, 0.02, 0.02, 0.86], [4.6, 0.42, 0.42, 0.05, 0.95], [6.2, 0.5, 0.55, 0.05, 1.0], [8.2, 0.5, 0.52, 0.05, 1.0], [9.8, 0.3, 0.28, 0.05, 0.95], [10.8, 0.06, 0.05, 0.02, 0.9]]),
+    wing('wing', trap(10.5, 0.6, 1.8, 6.2, 6.73, 41, 1.9, -5, 0.045)),
+    surf(trap(18.6, 0.15, 1.8, 3.2, 4.4, 50, 1.3, 0, 0.04)),
+    surf(vfin(16.2, 0.6, 1.35, 3.8, 3.2, 50, 1.6, 8, 0.045)),
+    noz({ s: 22.62, z: 0.78, r: 0.62, len: 1.4, mirror: true }),
+  ],
+  stations: [
+    { id: 'Belly F', label: 'Belly, forward pair', at: [11.8, -0.82, 0.8], kind: 'semi', mirror: true, max: 600 },
+    { id: 'Belly A', label: 'Belly, aft pair', at: [16.8, -0.82, 0.8], kind: 'semi', mirror: true, max: 600 },
+    { id: 'W1', label: 'Inboard wing', on: 'wing', f: 0.3, c: 0.4, mirror: true, max: 2500 },
+    { id: 'W2', label: 'Outboard wing', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500 },
+    { id: 'CL', label: 'Centreline (MiG-31K)', at: [14.5, -0.8, 0], max: 4500, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'Interceptor', note: 'Four R-37M very long range missiles under the belly, two tanks.', set: { 'Belly F': 'R-37M', 'Belly A': 'R-37M', W1: 'PTB-2500', W2: 'R-73' } },
+    { name: 'Classic', note: 'The original R-33 fit.', set: { 'Belly F': 'R-33', 'Belly A': 'R-33', W1: 'PTB-2500', W2: 'R-73' } },
+    { name: 'Kinzhal (MiG-31K)', note: 'An air-launched ballistic missile on the centreline.', set: { CL: 'Kh-47M2', W1: 'PTB-2500' } },
+  ],
+});
+
+A({
+  key: 'mig21', name: 'MiG-21bis Fishbed-L', short: 'MiG-21bis', nick: 'Fishbed', variant: '',
+  role: 'Interceptor and light fighter', cat: 'Fighter', gen: 3, country: 'Soviet Union', maker: 'Mikoyan-Gurevich',
+  first: 1955, intro: 1959, built: '11,496 (all variants, the most-built supersonic jet)', status: 'Still flown by a handful of air forces', crew: 1,
+  paint: '#b3b8ba', paint2: '#9aa0a3',
+  dims: { len: 14.7, span: 7.154, height: 4.1, wingArea: 23 },
+  wt: { empty: 5846, mtow: 10400, fuel: 2280 },
+  eng: { n: 1, name: 'Tumansky R25-300', type: 'Afterburning turbojet', dry: 40.2, wet: 69.6, bypass: 0, sfc: [0.96, 2.2], note: 'Emergency afterburner: 97.1 kN for up to 3 minutes below 4 km.' },
+  perf: { mach: 2.05, vmax: 2175, ceil: 17800, radius: 450, ferry: 1210, g: '+8.5' },
+  gun: 'GSh-23L 23 mm, 200 rounds', hard: '5 (4 underwing, 1 centreline)', payload: 2000,
+  fact: 'A small tailed delta with a nose intake and movable shock cone. Cheap and simple, it was built in greater numbers than any other supersonic aircraft.',
+  est: ['fuel', 'radius'],
+  geo: [
+    fus([[0, 0.45, 0.45, 0.45, 0, 2], [2, 0.55, 0.6, 0.55, 0.05, 2], [4, 0.62, 0.68, 0.58, 0.08, 2], [6, 0.62, 0.72, 0.6, 0.1, 2.1], [9, 0.62, 0.62, 0.58, 0.05, 2], [12, 0.56, 0.55, 0.55, 0, 2], [14.0, 0.5, 0.5, 0.5, 0, 2]], { capF: 'hole' }),
+    { t: 'loft', st: [[-0.7, 0.02, 0.02, 0.02], [0, 0.26, 0.26, 0.26], [0.6, 0.32, 0.32, 0.32]], mat: 'dark' },
+    fus([[3, 0.05, 0.05, 0.02, 0.6], [5.8, 0.32, 0.28, 0.05, 0.64], [11, 0.25, 0.15, 0.05, 0.55], [13, 0.05, 0.05, 0.02, 0.5]], { fine: 0 }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.58], [3.0, 0.36, 0.3, 0.05, 0.62], [4.4, 0.4, 0.42, 0.05, 0.66], [5.6, 0.32, 0.3, 0.05, 0.66], [6.0, 0.05, 0.05, 0.02, 0.62]]),
+    wing('wing', trap(6.4, -0.15, 0.5, 6.5, 3.58, 57, 0.9, -2, 0.045)),
+    surf(trap(12.1, -0.1, 0.5, 1.8, 1.95, 55, 0.5, 0, 0.04)),
+    { t: 'panel', sec: vfin(9.8, 0.45, 0, 3.4, 2.2, 60, 0.8, 0, 0.045) },
+    noz({ s: 14.7, r: 0.46, len: 0.8 }),
+  ],
+  stations: [
+    { id: '1/4', label: 'Outboard', on: 'wing', f: 0.72, c: 0.35, mirror: true, max: 250, fixed: true, drop: 0.2 },
+    { id: '2/3', label: 'Inboard', on: 'wing', f: 0.35, c: 0.35, mirror: true, max: 500, fixed: true },
+    { id: '5', label: 'Centreline', at: [8.8, -0.72, 0], max: 800, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Interceptor', note: 'Two R-60Ms, two R-13Ms and the centreline tank.', set: { '1/4': 'R-60M', '2/3': 'R-13M', '5': 'PTB-800' } },
+    { name: 'Ground attack', note: 'Two FAB-250s.', set: { '1/4': 'R-60M', '2/3': 'FAB-250', '5': 'PTB-800' } },
+    { name: 'Ferry', note: 'Three drop tanks.', set: { '2/3': 'PTB-490', '5': 'PTB-800' } },
+  ],
+});
+
+A({
+  key: 'typhoon', name: 'Eurofighter Typhoon', short: 'Typhoon', nick: '', variant: 'Tranche 3',
+  role: 'Multirole fighter', cat: 'Fighter', gen: 4.5, country: 'UK / Germany / Italy / Spain', maker: 'Eurofighter GmbH (Airbus, BAE Systems, Leonardo)',
+  first: 1994, intro: 2003, built: '600+', status: 'In production', crew: 1,
+  paint: '#8e979e', paint2: '#7b858d',
+  dims: { len: 15.96, span: 10.95, height: 5.28, wingArea: 51.2 },
+  wt: { empty: 11000, mtow: 23500, fuel: 4996 },
+  eng: { n: 2, name: 'Eurojet EJ200', type: 'Afterburning turbofan', dry: 60, wet: 90, bypass: 0.4 },
+  perf: { mach: 2.0, vmax: 2125, cruise: 'Supercruise about Mach 1.5', ceil: 19812, radius: 1389, ferry: 3790, g: '+9 / -3' },
+  gun: 'Mauser BK-27 27 mm, 150 rounds', hard: '13 (8 underwing, 4 fuselage, 1 centreline)', payload: 9000,
+  fact: 'An unstable canard delta that needs its flight computers to stay in the air, which makes it very agile. It can cruise above Mach 1 without afterburner.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.4, 0.42, 0.42, 0.4, 0, 2], [3.0, 0.6, 0.6, 0.55, 0.05, 2.1], [4.8, 0.68, 0.72, 0.62, 0.1, 2.2], [6.8, 0.85, 0.7, 0.8, 0, 2.6], [9.5, 1.05, 0.62, 0.75, 0, 2.8], [12.5, 0.95, 0.55, 0.55, 0, 2.6], [14.5, 0.85, 0.5, 0.5, 0, 2.4], [15.4, 0.8, 0.48, 0.48, 0, 2.3]], { capF: 'dark' }),
+    fus([[5.2, 0.72, 0.35, 0.35, -1.05, 4], [6.6, 0.75, 0.35, 0.4, -0.95, 4], [9, 0.6, 0.3, 0.3, -0.7, 3], [10.5, 0.3, 0.2, 0.2, -0.5, 2]], { capF: 'hole', fine: 0 }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.6], [3.6, 0.38, 0.4, 0.05, 0.68], [5.0, 0.42, 0.48, 0.05, 0.72], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.06, 0.05, 0.02, 0.66]]),
+    surf(trap(4.8, 0.1, 0.6, 1.7, 2.1, 50, 0.6, 0, 0.04)),
+    wing('wing', trap(7.0, -0.2, 0.85, 7.6, 5.2, 53, 1.2, 0, 0.04)),
+    { t: 'panel', sec: vfin(10.6, 0.5, 0, 3.8, 2.5, 50, 1.3, 0, 0.045) },
+    noz({ s: 15.96, z: 0.45, r: 0.46, len: 1.0, mirror: true }),
+  ],
+  stations: [
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.86, c: 0.35, mirror: true, max: 150, fixed: true, drop: 0.2 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.62, c: 0.35, mirror: true, max: 1000, fixed: true },
+    { id: 'W3', label: 'Inboard (wet)', on: 'wing', f: 0.36, c: 0.35, mirror: true, max: 1500, fixed: true },
+    { id: 'F-fwd', label: 'Fuselage, forward', at: [8.4, -0.9, 0.62], kind: 'semi', mirror: true, max: 200 },
+    { id: 'F-aft', label: 'Fuselage, aft', at: [12.0, -0.62, 0.62], kind: 'semi', mirror: true, max: 200 },
+    { id: 'CL', label: 'Centreline (wet)', at: [10.2, -0.95, 0], max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Quick reaction alert', note: 'Four Meteors semi-recessed, two IRIS-T, two tanks.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W3: 'Tank 1000L' } },
+    { name: 'Swing role', note: 'Paveway IVs and Meteors on one sortie, with a LITENING pod.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W2: ['Paveway IV', 2], W3: 'Tank 1000L', CL: 'LITENING' } },
+    { name: 'Deep strike', note: 'Two Storm Shadows on the inboard pylons.', set: { 'F-fwd': 'Meteor', 'F-aft': 'AIM-120C', W1: 'IRIS-T', W2: 'Tank 1000L', W3: 'Storm Shadow' } },
+    { name: 'Brimstone', note: 'Two launchers of three Brimstones for moving targets.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W2: 'Brimstone', W3: 'Tank 1000L', CL: 'LITENING' } },
+  ],
+});
+
+A({
+  key: 'rafale', name: 'Dassault Rafale C', short: 'Rafale', nick: '', variant: 'F3-R / F4',
+  role: 'Omnirole fighter', cat: 'Fighter', gen: 4.5, country: 'France', maker: 'Dassault Aviation',
+  first: 1986, intro: 2001, built: '300+', status: 'In production', crew: 1,
+  paint: '#8a9298', paint2: '#747c82',
+  dims: { len: 15.27, span: 10.9, height: 5.34, wingArea: 45.7 },
+  wt: { empty: 9850, mtow: 24500, fuel: 4700 },
+  eng: { n: 2, name: 'Safran M88-2', type: 'Afterburning turbofan', dry: 50.04, wet: 75.62, bypass: 0.3 },
+  perf: { mach: 1.8, vmax: 1912, cruise: 'Supercruise Mach 1.4 with 6 missiles', ceil: 15835, radius: 1850, ferry: 3700, g: '+9 / -3.6' },
+  gun: 'GIAT 30M791 30 mm, 125 rounds', hard: '14 (13 on the navy M)', payload: 9500,
+  fact: 'France builds every major part itself: airframe, M88 engines, radar and weapons. The Rafale also carries the ASMP-A nuclear missile for France\'s airborne deterrent.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.4, 0.38, 0.36, 0, 2], [2.8, 0.58, 0.56, 0.5, 0.05, 2.1], [4.5, 0.68, 0.7, 0.58, 0.1, 2.2], [6.5, 1.15, 0.65, 0.62, 0, 2.8], [9.5, 1.2, 0.6, 0.6, 0, 3], [12.5, 1.0, 0.55, 0.55, 0, 2.8], [14.4, 0.9, 0.5, 0.5, 0, 2.4]], { capF: 'dark' }),
+    pod([[5.0, 0.35, 0.45, 0.5, -0.45, 2.2], [6.5, 0.4, 0.45, 0.5, -0.4, 2.5], [8.5, 0.35, 0.4, 0.4, -0.3, 2]], 0.95, { capF: 'hole' }),
+    canopy([[2.6, 0.05, 0.02, 0.02, 0.58], [3.4, 0.38, 0.4, 0.05, 0.66], [4.8, 0.42, 0.48, 0.05, 0.7], [6.2, 0.3, 0.28, 0.05, 0.7], [7.2, 0.06, 0.05, 0.02, 0.66]]),
+    surf(trap(5.8, 0.25, 0.95, 1.6, 2.5, 50, 0.6, 5, 0.04)),
+    wing('wing', trap(7.0, -0.15, 0.95, 7.2, 5.1, 48, 1.2, 0, 0.04)),
+    { t: 'panel', sec: vfin(10.3, 0.5, 0, 3.8, 2.7, 50, 1.2, 0, 0.045) },
+    noz({ s: 15.27, z: 0.45, r: 0.44, len: 0.9, mirror: true }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 120 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.76, c: 0.38, mirror: true, max: 150, fixed: true, drop: 0.22 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.5, c: 0.38, mirror: true, max: 1300, fixed: true },
+    { id: 'W3', label: 'Inboard (wet)', on: 'wing', f: 0.24, c: 0.38, mirror: true, max: 2000, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [10.5, -0.62, 0.72], kind: 'conf', mirror: true, max: 250 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.8, -0.62, 0], max: 1300, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Air defence', note: 'Two Meteors, four MICAs, three tanks.', set: { Tip: 'MICA', W1: 'MICA', W2: 'Meteor', W3: 'Tank 2000L', CL: 'Tank 1250L' } },
+    { name: 'Deep strike (SCALP)', note: 'Two SCALP cruise missiles, the load used over Libya and Syria.', set: { Tip: 'MICA', W1: 'MICA', W2: 'Tank 2000L', W3: 'Storm Shadow', CL: 'Tank 1250L' } },
+    { name: 'AASM Hammer', note: 'Six rocket-boosted guided bombs with a TALIOS pod.', set: { Tip: 'MICA', W1: 'MICA', W2: ['AASM', 3], W3: 'Tank 2000L', F: 'TALIOS' } },
+    { name: 'Nuclear (ASMP-A)', note: 'France\'s airborne deterrent: one ASMP-A on the centreline.', set: { Tip: 'MICA', W1: 'MICA', W3: 'Tank 2000L', CL: 'ASMP-A' } },
+  ],
+});
+
+A({
+  key: 'gripen', name: 'Saab JAS 39C Gripen', short: 'Gripen C', nick: 'Gripen', variant: '',
+  role: 'Light multirole fighter', cat: 'Fighter', gen: 4.5, country: 'Sweden', maker: 'Saab',
+  first: 1988, intro: 1996, built: '280+ (all variants)', status: 'In service; Gripen E in production', crew: 1,
+  paint: '#8c959b', paint2: '#79838a',
+  dims: { len: 14.1, span: 8.4, height: 4.5, wingArea: 25.54 },
+  wt: { empty: 6800, mtow: 14000, fuel: 2400 },
+  eng: { n: 1, name: 'Volvo Aero RM12 (licensed GE F404)', type: 'Afterburning turbofan', dry: 54, wet: 80.5, bypass: 0.31 },
+  perf: { mach: 2.0, vmax: 2130, ceil: 15240, radius: 800, ferry: 3200, g: '+9 / -3' },
+  gun: 'Mauser BK-27 27 mm, 120 rounds', hard: '8 (2 wingtip, 4 underwing, 2 fuselage/centreline)', payload: 5300,
+  fact: 'Designed to fly from 800 m stretches of Swedish road, rearmed and refuelled by conscripts in ten minutes. Close-coupled canards help it stop in short distances.',
+  est: ['fuel'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.38, 0.38, 0.36, 0, 2], [2.8, 0.52, 0.52, 0.48, 0.05, 2.1], [4.4, 0.6, 0.62, 0.52, 0.1, 2.2], [6.2, 0.95, 0.6, 0.55, 0, 2.6], [9, 0.95, 0.55, 0.55, 0, 2.6], [11.8, 0.75, 0.5, 0.5, 0, 2.3], [13.3, 0.52, 0.45, 0.45, 0, 2]], { capF: 'dark' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.1, 2.5], [6.2, 0.35, 0.45, 0.45, -0.1, 2.5], [8, 0.3, 0.4, 0.4, -0.05, 2]], 0.8, { capF: 'hole' }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.36, 0.38, 0.05, 0.62], [4.6, 0.4, 0.45, 0.05, 0.66], [5.8, 0.3, 0.28, 0.05, 0.66], [6.8, 0.05, 0.05, 0.02, 0.62]]),
+    surf(trap(5.3, 0.2, 0.8, 1.8, 2.35, 45, 0.8, 0, 0.04)),
+    wing('wing', [[7.0, -0.15, 0.85, 5.8, 0.04], [8.6, -0.15, 2.4, 3.9, 0.04], [11.0, -0.15, 4.2, 1.3, 0.04]]),
+    { t: 'panel', sec: vfin(9.4, 0.45, 0, 3.2, 2.5, 48, 1.1, 0, 0.045) },
+    noz({ s: 14.1, r: 0.42, len: 0.9 }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 100 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.7, c: 0.35, mirror: true, max: 350, fixed: true, drop: 0.22 },
+    { id: 'W2', label: 'Inboard (wet)', on: 'wing', f: 0.3, c: 0.35, mirror: true, max: 1400, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [9.0, -0.6, 0.55], kind: 'conf', mirror: true, max: 250 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.4, -0.62, 0], max: 1100, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Air defence', note: 'Four AMRAAMs and two IRIS-T.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'AIM-120C', CL: 'Tank 1100L' } },
+    { name: 'Meteor', note: 'Long-range fit with two Meteors.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'Meteor', CL: 'Tank 1100L' } },
+    { name: 'Anti-ship', note: 'Two RBS 15F sea skimmers.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'RBS 15F', CL: 'Tank 1100L' } },
+    { name: 'Strike', note: 'Laser-guided bombs with a LITENING pod.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'GBU-12', F: 'LITENING', CL: 'Tank 1100L' } },
+  ],
+});
+
+A({
+  key: 'j20', name: 'Chengdu J-20 Mighty Dragon', short: 'J-20', nick: 'Mighty Dragon', variant: 'J-20A',
+  role: 'Stealth air superiority fighter', cat: 'Fighter', gen: 5, country: 'China', maker: 'Chengdu Aircraft Corporation',
+  first: 2011, intro: 2017, built: 'about 300 (estimated)', status: 'In production', crew: 1,
+  paint: '#7e868c', paint2: '#686f75',
+  dims: { len: 20.4, span: 12.88, height: 4.45, wingArea: 73 },
+  wt: { empty: 17000, mtow: 37000, fuel: 12000 },
+  eng: { n: 2, name: 'Shenyang WS-10C', type: 'Afterburning turbofan', dry: 89, wet: 142, bypass: 0.7 },
+  perf: { mach: 2.0, vmax: 2100, ceil: 20000, radius: 2000, ferry: 5500, g: '+9' },
+  gun: 'None', hard: 'Main bay (4-6 missiles), 2 side bays, 4 underwing', payload: 11000,
+  fact: 'A long, heavy canard delta built for range. Its side bays swing their missiles out on rails before the doors shut, so it can fire short-range missiles with the bay closed.',
+  est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'ferry', 'payload', 'eng', 'wingArea', 'vmax'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.5, 0.42, 0.38, 0, 1.6], [3.8, 0.78, 0.65, 0.55, 0.05, 1.6], [5.8, 1.0, 0.75, 0.55, 0.08, 1.7], [8, 1.6, 0.65, 0.5, 0, 1.8], [12, 1.9, 0.55, 0.45, 0, 2], [16, 1.7, 0.45, 0.4, 0, 2.1], [18.8, 1.3, 0.38, 0.35, 0, 2.3], [19.8, 1.1, 0.35, 0.33, 0, 2.3]], { capF: 'dark' }),
+    pod([[5.6, 0.45, 0.5, 0.55, -0.1, 1.6], [7.2, 0.52, 0.52, 0.55, -0.08, 1.8], [9.5, 0.45, 0.45, 0.45, -0.05, 2]], 1.25, { capF: 'hole' }),
+    canopy([[3.2, 0.05, 0.02, 0.02, 0.6], [4.0, 0.4, 0.42, 0.05, 0.7], [5.6, 0.45, 0.5, 0.05, 0.75], [7.2, 0.3, 0.3, 0.05, 0.75], [8.4, 0.05, 0.05, 0.02, 0.72]], { mat: 'gold' }),
+    surf(trap(7.2, 0.25, 1.2, 2.4, 3.5, 50, 0.8, 0, 0.04)),
+    wing('wing', [[8.0, 0.05, 1.3, 9.0, 0.02], [10.4, 0.0, 2.3, 7.0, 0.035], [14.4, 0.0, 6.44, 1.9, 0.04]]),
+    surf(vfin(15.8, -0.4, 0.95, 2.0, 0.7, 55, 1.0, 150, 0.04)),
+    surf(vfin(15.2, 0.4, 1.1, 2.8, 2.2, 45, 1.2, 30, 0.04)),
+    noz({ s: 20.4, z: 0.62, r: 0.55, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Main', label: 'Main bay', at: [11.4, -0.15, 0], kind: 'bay', max: 1000, bay: { len: 4.6, w: 1.6, h: 0.65 } },
+    { id: 'Side', label: 'Side bay', at: [9.6, -0.1, 1.3], kind: 'bay', mirror: true, bay: { len: 3.4, w: 0.42, h: 0.45 } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.3, c: 0.4, mirror: true },
+    { id: 'W2', label: 'Outboard', on: 'wing', f: 0.58, c: 0.4, mirror: true },
+  ],
+  loadouts: [
+    { name: 'Stealth air-to-air', note: 'Four PL-15s in the main bay, a PL-10 in each side bay.', set: { Main: ['PL-15', 4], Side: 'PL-10' } },
+    { name: 'Ferry', note: 'Four external tanks for deployment.', set: { Main: ['PL-15', 4], Side: 'PL-10', W1: 'PTB-2000', W2: 'PTB-2000' } },
+  ],
+});
+
+A({
+  key: 'm2000', name: 'Dassault Mirage 2000C', short: 'Mirage 2000C', nick: '', variant: 'RDI',
+  role: 'Interceptor and air superiority fighter', cat: 'Fighter', gen: 4, country: 'France', maker: 'Dassault Aviation',
+  first: 1978, intro: 1984, built: '601 (all variants)', status: 'In service with 8 air forces', crew: 1,
+  paint: '#8f989e', paint2: '#7b858b',
+  dims: { len: 14.36, span: 9.13, height: 5.2, wingArea: 41 },
+  wt: { empty: 7500, mtow: 17000, fuel: 3160 },
+  eng: { n: 1, name: 'Snecma M53-P2', type: 'Afterburning turbofan', dry: 64.3, wet: 95.1, bypass: 0.36 },
+  perf: { mach: 2.2, vmax: 2336, ceil: 17060, radius: 740, ferry: 3335, g: '+9 / -3.2' },
+  gun: '2 × DEFA 554 30 mm, 125 rounds each', hard: '9 (4 underwing, 5 fuselage)', payload: 6300,
+  fact: 'A pure tailless delta like the Mirage III, but made unstable and flown by wire so it can turn hard at low speed. The M53 is a single-shaft engine, unusual for a turbofan.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.4, 0.4, 0.4, 0, 2], [3.2, 0.55, 0.58, 0.52, 0.05, 2.1], [4.8, 0.6, 0.65, 0.55, 0.1, 2.2], [6.5, 0.62, 0.62, 0.6, 0.05, 2.2], [9, 0.62, 0.6, 0.6, 0, 2.2], [12, 0.58, 0.55, 0.55, 0, 2], [13.6, 0.52, 0.5, 0.5, 0, 2]], { capF: 'dark' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.05, 1.6], [6.5, 0.35, 0.48, 0.48, 0, 2], [9, 0.3, 0.4, 0.4, 0, 2]], 0.75, { capF: 'hole' }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.58], [3.6, 0.36, 0.38, 0.05, 0.66], [5.0, 0.4, 0.46, 0.05, 0.7], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.05, 0.05, 0.02, 0.66]]),
+    wing('wing', trap(6.0, -0.2, 0.6, 8.0, 4.56, 58, 0.9, 0, 0.045)),
+    { t: 'panel', sec: vfin(9.3, 0.5, 0, 4.0, 2.9, 57, 1.0, 0, 0.045) },
+    noz({ s: 14.36, r: 0.5, len: 1.0 }),
+  ],
+  stations: [
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.76, c: 0.4, mirror: true, max: 200, fixed: true, drop: 0.2 },
+    { id: 'W2', label: 'Inboard (wet)', on: 'wing', f: 0.36, c: 0.4, mirror: true, max: 1800, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [9.4, -0.72, 0.52], kind: 'conf', mirror: true, max: 400 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.0, -0.62, 0], max: 1800, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Intercept', note: 'Two Super 530D and two Magic 2 with the centreline tank.', set: { W1: 'Magic 2', W2: 'Super 530D', CL: 'Tank 1300L' } },
+    { name: 'Long patrol', note: 'Three tanks.', set: { W1: 'Magic 2', W2: 'Tank 1300L', CL: 'Tank 1300L' } },
+    { name: 'Ground attack', note: 'Four bombs on the fuselage.', set: { W1: 'Magic 2', W2: 'Tank 1300L', F: ['Mk 82', 2] } },
+  ],
+});
+
+A({
+  key: 'tornado', name: 'Panavia Tornado IDS', short: 'Tornado', nick: '', variant: 'IDS / GR4',
+  role: 'Low-level strike aircraft', cat: 'Fighter', gen: 4, country: 'UK / Germany / Italy', maker: 'Panavia',
+  first: 1974, intro: 1979, built: '992 (all variants)', status: 'Retired by the UK in 2019; in service with Germany, Italy, Saudi Arabia', crew: 2,
+  paint: '#6f7a70', paint2: '#5a645c',
+  dims: { len: 16.72, span: 13.91, spanSwept: 8.6, height: 5.95, wingArea: 26.6 },
+  wt: { empty: 13890, mtow: 28000, fuel: 5090 },
+  eng: { n: 2, name: 'Turbo-Union RB199-34R Mk 103', type: 'Afterburning turbofan (three-spool)', dry: 43.8, wet: 76.8, bypass: 1.1 },
+  sweep: { def: 25, min: 25, max: 67 },
+  perf: { mach: 2.2, vmax: 2417, cruise: 'Mach 0.92 at 60 m above ground', ceil: 15240, radius: 1390, ferry: 3890, g: '+7.5' },
+  gun: 'Mauser BK-27 27 mm, 180 rounds', hard: '7 (3 fuselage, 4 swivelling wing)', payload: 9000,
+  fact: 'Built to run in at treetop height at night, following the terrain automatically. Its underwing pylons swivel as the wings sweep so the stores always point into the airflow.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.48, 0.48, 0.45, 0, 2], [3.4, 0.65, 0.68, 0.6, 0.08, 2.2], [5.2, 0.72, 0.8, 0.62, 0.12, 2.3], [7.2, 1.25, 0.8, 0.62, 0.05, 3.2], [10, 1.4, 0.75, 0.6, 0, 3.4], [13.5, 1.3, 0.65, 0.6, 0, 3], [15.5, 1.0, 0.6, 0.55, 0, 2.6], [16.2, 0.95, 0.55, 0.55, 0, 2.4]], { capF: 'dark' }),
+    pod([[6.2, 0.45, 0.62, 0.55, 0.0, 4], [7.6, 0.5, 0.62, 0.6, 0, 3.5], [10, 0.4, 0.5, 0.5, 0, 3]], 1.1, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.42, 0.05, 0.86], [5.8, 0.48, 0.5, 0.05, 0.92], [7.5, 0.44, 0.44, 0.05, 0.92], [8.6, 0.2, 0.15, 0.03, 0.86], [9.2, 0.05, 0.05, 0.02, 0.82]]),
+    surf([[6.8, 0.35, 1.2, 4.0, 0.03], [8.4, 0.35, 2.25, 2.6, 0.04]]),
+    wing('wing', [[8.3, 0.35, 2.25, 3.2, 0.05], [10.49, 0.35, 6.95, 1.4, 0.05]], { pivot: [9.3, 2.25], sweep: { def: 25 } }),
+    surf(trap(13.6, 0.0, 1.3, 3.2, 3.9, 55, 1.0, -3, 0.04)),
+    { t: 'panel', sec: vfin(10.8, 0.6, 0, 4.6, 3.2, 55, 1.4, 0, 0.045) },
+    noz({ s: 16.72, z: 0.55, r: 0.42, len: 0.9, mirror: true }),
+  ],
+  stations: [
+    { id: 'Shoulder', label: 'Fuselage shoulder', at: [10.2, -0.72, 0.85], kind: 'conf', mirror: true, max: 1400 },
+    { id: 'W-in', label: 'Inboard wing (swivelling)', on: 'wing', f: 0.22, c: 0.35, mirror: true, max: 2250, fixed: true },
+    { id: 'W-out', label: 'Outboard wing (swivelling)', on: 'wing', f: 0.62, c: 0.35, mirror: true, max: 500 },
+    { id: 'CL', label: 'Centreline', at: [10.8, -0.62, 0], max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Deep strike (GR4)', note: 'Two Storm Shadows on the shoulders, big 2,250 L wing tanks.', set: { Shoulder: 'Storm Shadow', 'W-in': 'Tank 2250L' } },
+    { name: 'Taurus (German IDS)', note: 'Two Taurus KEPD 350 stand-off missiles.', set: { Shoulder: 'Taurus', 'W-in': 'Tank 2250L', 'W-out': 'AIM-9M' } },
+    { name: 'Paveway IV', note: 'Four Paveway IVs with a LITENING pod.', set: { Shoulder: ['Paveway IV', 2], 'W-in': 'Tank 2250L', CL: 'LITENING' } },
+    { name: 'Brimstone', note: 'Four launchers, twelve Brimstones.', set: { Shoulder: ['Brimstone', 2], 'W-in': 'Tank 2250L', CL: 'LITENING' } },
+  ],
+});
+
+A({
+  key: 'a10', name: 'A-10C Thunderbolt II', short: 'A-10C', nick: 'Warthog', variant: '',
+  role: 'Close air support', cat: 'Attack', gen: 3, country: 'United States', maker: 'Fairchild Republic',
+  first: 1972, intro: 1977, built: '716', status: 'In service, being retired', crew: 1,
+  paint: '#7a8084', paint2: '#666c70',
+  dims: { len: 16.26, span: 17.53, height: 4.47, wingArea: 47 },
+  wt: { empty: 11321, mtow: 22680, fuel: 4990 },
+  eng: { n: 2, name: 'General Electric TF34-GE-100A', type: 'High-bypass turbofan', dry: 40.3, bypass: 6.2, sfc: [0.37, 0.37] },
+  perf: { mach: 0.62, vmax: 706, cruise: '560 km/h', ceil: 13700, radius: 460, ferry: 4150, g: '+7.33 / -3' },
+  gun: 'GAU-8/A Avenger 30 mm seven-barrel, 1,174 rounds', hard: '11 (8 underwing, 3 fuselage)', payload: 7260,
+  fact: 'Built around its 30 mm cannon, which is as long as a car. The pilot sits in a titanium bathtub, and the engines sit high and apart so one hit cannot kill both.',
+  geo: [
+    fus([[0, 0.25, 0.25, 0.25, 0, 2], [1, 0.55, 0.55, 0.55, 0, 2], [2.5, 0.75, 0.75, 0.72, 0.05, 2.3], [4.5, 0.85, 0.9, 0.75, 0.1, 2.5], [7, 0.9, 0.85, 0.8, 0, 2.6], [10, 0.78, 0.7, 0.7, 0, 2.4], [13, 0.5, 0.5, 0.5, 0.1, 2], [15, 0.35, 0.35, 0.35, 0.2, 2], [16.0, 0.2, 0.2, 0.2, 0.25, 2]], { capF: 'dark' }),
+    { t: 'loft', st: [[-0.5, 0.07, 0.07, 0.07, -0.25], [0.2, 0.09, 0.09, 0.09, -0.25]], mat: 'dark', seg: 8 },
+    canopy([[2.0, 0.05, 0.02, 0.02, 0.8], [2.8, 0.4, 0.45, 0.05, 0.9], [4.2, 0.44, 0.5, 0.05, 0.95], [5.6, 0.35, 0.32, 0.05, 0.95], [6.4, 0.05, 0.05, 0.02, 0.9]]),
+    wing('wingc', trap(6.4, -0.45, 0.8, 3.2, 3.2, 0, 3.0, 0, 0.16)),
+    wing('wing', trap(6.4, -0.45, 3.2, 3.0, 8.76, 2, 1.6, 7, 0.15, 0.13)),
+    pod([[9.8, 0.6, 0.6, 0.6, 1.25, 2], [10.3, 0.64, 0.64, 0.64, 1.25, 2], [12.6, 0.65, 0.65, 0.65, 1.25, 2], [13.6, 0.5, 0.5, 0.5, 1.25, 2]], 1.1, { capF: 'dark' }),
+    surf([[11.0, 0.55, 0.55, 1.6, 0.1], [11.2, 0.75, 0.75, 1.2, 0.1]]),
+    surf(trap(13.8, 0.3, 0.2, 2.3, 2.8, 0, 1.9, 0, 0.06)),
+    surf(vfin(14.0, -0.5, 2.8, 2.1, 2.4, 5, 1.6, 0, 0.06)),
+    noz({ s: 14.3, z: 1.1, y: 1.25, r: 0.45, len: 0.8, mirror: true, r2: 0.5 }),
+  ],
+  stations: [
+    { id: '1', label: 'Outboard left', on: 'wing', f: 0.92, c: 0.35, side: -1, max: 450, fixed: true, drop: 0.25 },
+    { id: '2', label: 'Outer wing left', on: 'wing', f: 0.62, c: 0.35, side: -1, max: 1135, fixed: true },
+    { id: '3/9', label: 'Inner wing', on: 'wing', f: 0.3, c: 0.35, mirror: true, max: 1135, fixed: true },
+    { id: '4/8', label: 'Wing root', on: 'wingc', f: 0.75, c: 0.35, mirror: true, max: 1590, fixed: true },
+    { id: '5/7', label: 'Fuselage', at: [7.8, -0.95, 0.55], mirror: true, max: 1590, drop: 0.2 },
+    { id: '10', label: 'Outer wing right', on: 'wing', f: 0.62, c: 0.35, max: 1135, fixed: true },
+    { id: '11', label: 'Outboard right', on: 'wing', f: 0.92, c: 0.35, max: 450, fixed: true, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Close air support', note: 'Mavericks, laser-guided and GPS bombs, Sidewinders and a targeting pod.', set: { '1': ['AIM-9M', 2], '2': 'Sniper', '3/9': 'AGM-65', '4/8': 'GBU-38', '5/7': 'GBU-12', '11': 'ALQ-184' } },
+    { name: 'Anti-armour', note: 'Six Mavericks on triple launchers and Sensor Fuzed Weapons.', set: { '1': ['AIM-9M', 2], '2': 'Sniper', '3/9': ['AGM-65', 3], '4/8': 'CBU-97', '11': 'ALQ-184' } },
+    { name: 'Iron bombs', note: 'Mk 82s on every heavy station.', set: { '1': ['AIM-9M', 2], '3/9': ['Mk 82', 3], '4/8': ['Mk 82', 3], '5/7': 'Mk 82', '11': 'ALQ-184' } },
+  ],
+});

@@ -1,0 +1,1973 @@
+'use strict';
+
+// ---- 00-core.js
+// Core helpers shared by the engine and the page.
+// Frame: x forward (nose is +x), y up, z to starboard. Units: metres, kilograms, kilonewtons.
+// Aircraft data is authored with s = distance aft of the nose; x = len/2 - s puts the origin mid-length.
+
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const D2R = Math.PI / 180;
+const hash = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+
+// Materials: albedo, specular strength, shininess, emissive flag.
+// 'skin' is replaced per aircraft by its paint colour.
+const MATS = {
+  skin:    { c: [0.62, 0.66, 0.70], sp: 0.35, sh: 18 },
+  skin2:   { c: [0.45, 0.50, 0.55], sp: 0.30, sh: 18 },   // second camouflage tone / panels
+  dark:    { c: [0.20, 0.22, 0.25], sp: 0.20, sh: 10 },   // radomes, intake lips, walkways
+  glass:   { c: [0.55, 0.78, 0.95], sp: 1.30, sh: 40 },
+  gold:    { c: [0.85, 0.68, 0.35], sp: 1.30, sh: 40 },   // gold-tinted canopy (F-22, F-35)
+  metal:   { c: [0.55, 0.52, 0.50], sp: 0.90, sh: 28 },   // bare metal nozzles
+  hole:    { c: [0.05, 0.05, 0.06], sp: 0.00, sh: 1 },    // intake and nozzle openings
+  burner:  { c: [0.10, 0.06, 0.04], sp: 0.00, sh: 1, glow: 1 }, // nozzle interior, glows with throttle
+  white:   { c: [0.86, 0.87, 0.88], sp: 0.45, sh: 20 },   // most missiles
+  olive:   { c: [0.44, 0.47, 0.33], sp: 0.20, sh: 12 },   // US bombs
+  sand:    { c: [0.70, 0.64, 0.50], sp: 0.20, sh: 12 },
+  tank:    { c: [0.68, 0.70, 0.71], sp: 0.40, sh: 18 },
+  band:    { c: [0.90, 0.72, 0.20], sp: 0.30, sh: 12 },   // yellow HE band
+  seeker:  { c: [0.30, 0.34, 0.40], sp: 1.00, sh: 30 },
+  prop:    { c: [0.30, 0.30, 0.32], sp: 0.40, sh: 16 },
+  door:    { c: [0.50, 0.54, 0.58], sp: 0.25, sh: 14 },   // open bay doors (skin tone set per aircraft)
+  bay:     { c: [0.18, 0.19, 0.20], sp: 0.10, sh: 8 },
+};
+const MAT_KEYS = Object.keys(MATS);
+const MAT_ID = Object.fromEntries(MAT_KEYS.map((k, i) => [k, i]));
+
+const hex2rgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; };
+
+// Mesh builder: vertices, triangles, per-triangle material and tag (0 airframe, k+1 store station k).
+class Mesh {
+  constructor() { this.v = []; this.t = []; this.m = []; this.g = []; }
+  vert(x, y, z) { this.v.push(x, y, z); return this.v.length / 3 - 1; }
+  tri(a, b, c, mat, tag = 0) { this.t.push(a, b, c); this.m.push(MAT_ID[mat] ?? 0); this.g.push(tag); }
+  quad(a, b, c, d, mat, tag) { this.tri(a, b, c, mat, tag); this.tri(a, c, d, mat, tag); }
+  append(o) {
+    const base = this.v.length / 3;
+    for (const x of o.v) this.v.push(x);
+    for (const i of o.t) this.t.push(i + base);
+    for (const x of o.m) this.m.push(x);
+    for (const x of o.g) this.g.push(x);
+  }
+  // Freeze into typed arrays and compute smooth vertex normals.
+  finish() {
+    const V = new Float32Array(this.v), T = new Uint32Array(this.t), N = new Float32Array(V.length);
+    for (let i = 0; i < T.length; i += 3) {
+      const a = T[i] * 3, b = T[i + 1] * 3, c = T[i + 2] * 3;
+      const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2];
+      const vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      // Consistent orientation is not guaranteed across parts, so accumulate unsigned
+      // against the running normal to keep smooth shading on shared vertices.
+      for (const k of [a, b, c]) {
+        const s = (N[k] * nx + N[k + 1] * ny + N[k + 2] * nz) < 0 ? -1 : 1;
+        N[k] += s * nx; N[k + 1] += s * ny; N[k + 2] += s * nz;
+      }
+    }
+    for (let i = 0; i < N.length; i += 3) {
+      const l = Math.hypot(N[i], N[i + 1], N[i + 2]) || 1;
+      N[i] /= l; N[i + 1] /= l; N[i + 2] /= l;
+    }
+    return { V, N, T, M: new Uint8Array(this.m), G: new Uint16Array(this.g), nv: V.length / 3, nt: T.length / 3 };
+  }
+}
+
+// ---- 10-geom.js
+// Geometry: lofted bodies, airfoil panels, nozzles, propellers.
+// All builders write into a Mesh through a transform `tf(x, y, z) -> [x, y, z]` so the same
+// code draws an airframe in aircraft space and a missile in its own space before placing it.
+
+const ID_TF = (x, y, z) => [x, y, z];
+
+// Loft through stations [s, halfWidth, top, bottom, yCentre, n]. n = superellipse exponent:
+// 2 ellipse, >2 boxy, <2 diamond (stealth chines). x = x0 - s.
+function loft(M, st, o = {}) {
+  const seg = o.seg || 18, tf = o.tf || ID_TF, x0 = o.x0 || 0, z0 = o.z || 0, mat = o.mat || 'skin', tag = o.tag || 0;
+  const rings = [];
+  for (const [s, hw, top, bot, yc = 0, n = 2] of st) {
+    const ring = [], e = 2 / n;
+    for (let k = 0; k < seg; k++) {
+      const a = (k / seg) * Math.PI * 2 + (o.rot || 0), c = Math.cos(a), sn = Math.sin(a);
+      const zz = hw * Math.sign(c) * Math.abs(c) ** e;
+      const yy = yc + (sn >= 0 ? top : bot) * Math.sign(sn) * Math.abs(sn) ** e;
+      ring.push(M.vert(...tf(x0 - s, yy, z0 + zz)));
+    }
+    rings.push(ring);
+  }
+  for (let i = 0; i + 1 < rings.length; i++) {
+    const A = rings[i], B = rings[i + 1];
+    const m = o.mats ? o.mats[i] || mat : mat;
+    for (let k = 0; k < seg; k++) M.quad(A[k], A[(k + 1) % seg], B[(k + 1) % seg], B[k], m, tag);
+  }
+  const cap = (ring, stn, m) => {
+    if (stn[1] < 0.02 && stn[2] < 0.02) return;
+    const c = M.vert(...tf(x0 - stn[0], stn[4] || 0, z0));
+    for (let k = 0; k < seg; k++) M.tri(c, ring[k], ring[(k + 1) % seg], m, tag);
+  };
+  cap(rings[0], st[0], o.capF || mat);
+  cap(rings[rings.length - 1], st[st.length - 1], o.capB || mat);
+}
+
+// Symmetric airfoil half-thickness (NACA 4-digit form), u in 0..1 of chord.
+const AF_U = [0, 0.025, 0.08, 0.18, 0.32, 0.5, 0.7, 0.86, 1];
+const afT = u => 5 * (0.2969 * Math.sqrt(u) - 0.126 * u - 0.3516 * u * u + 0.2843 * u ** 3 - 0.1036 * u ** 4);
+
+// Sections [s_le, y, z, chord, t] -> internal {le, te, t} in aircraft x. Swing wings rotate the
+// sections outboard of the pivot about the vertical axis (more sweep moves the tips aft).
+function panelSections(p, L, sweep) {
+  const out = [];
+  const d = p.sweep && sweep != null ? (sweep - p.sweep.def) * D2R : 0;
+  for (const [s, y, z, ch, t] of p.sec) {
+    let le = [s, z], te = [s + ch, z];
+    if (d && p.pivot && Math.abs(z) > p.pivot[1] - 1e-6) {
+      const rot = ([ss, zz]) => {
+        const ds = ss - p.pivot[0], dz = zz - p.pivot[1];
+        return [p.pivot[0] + ds * Math.cos(d) + dz * Math.sin(d), p.pivot[1] - ds * Math.sin(d) + dz * Math.cos(d)];
+      };
+      le = rot(le); te = rot(te);
+    }
+    out.push({ le: [L / 2 - le[0], y, le[1]], te: [L / 2 - te[0], y, te[1]], t: t ?? 0.05, ch });
+  }
+  return out;
+}
+
+function panel(M, secs, o = {}) {
+  const tf = o.tf || ID_TF, mat = o.mat || 'skin', tag = o.tag || 0, n = secs.length, K = AF_U.length;
+  const rings = [];
+  for (let i = 0; i < n; i++) {
+    // thickness direction: perpendicular to the span direction within the y-z plane
+    const a = secs[Math.max(0, i - 1)], b = secs[Math.min(n - 1, i + 1)];
+    let dy = b.le[1] - a.le[1], dz = b.le[2] - a.le[2];
+    const l = Math.hypot(dy, dz) || 1; dy /= l; dz /= l;
+    const ny = Math.abs(dz) > 1e-6 || Math.abs(dy) > 1e-6 ? dz : 1, nz = Math.abs(dz) > 1e-6 || Math.abs(dy) > 1e-6 ? -dy : 0;
+    const S = secs[i], chord = Math.hypot(S.te[0] - S.le[0], S.te[2] - S.le[2]);
+    const ring = [];
+    const pt = (u, side) => {
+      const h = afT(u) * S.t * chord * side;
+      const x = lerp(S.le[0], S.te[0], u), y = lerp(S.le[1], S.te[1], u) + ny * h, z = lerp(S.le[2], S.te[2], u) + nz * h;
+      return M.vert(...tf(x, y, z));
+    };
+    for (let k = K - 1; k >= 0; k--) ring.push(pt(AF_U[k], 1));
+    for (let k = 1; k < K - 1; k++) ring.push(pt(AF_U[k], -1));
+    rings.push(ring);
+  }
+  const R = rings[0].length;
+  for (let i = 0; i + 1 < n; i++)
+    for (let k = 0; k < R; k++) M.quad(rings[i][k], rings[i][(k + 1) % R], rings[i + 1][(k + 1) % R], rings[i + 1][k], mat, tag);
+  for (const ring of [rings[0], rings[n - 1]])
+    for (let k = 1; k + 1 < R; k++) M.tri(ring[0], ring[k], ring[k + 1], mat, tag);
+}
+
+// Engine nozzle: outer shell, dark throat, glowing burner face. Returns the exhaust source.
+function nozzle(M, p, L, zs = 1) {
+  const x = L / 2 - p.s, z = (p.z || 0) * zs, y = p.y || 0, len = p.len || 1.2, seg = 20;
+  if (p.shape === '2d') {
+    const w = p.w, h = p.h, st = [[0, w * 1.08, h * 1.15, h * 1.15, 0, 5], [len * 0.7, w, h, h, 0, 6], [len, w * 0.98, h * 0.8, h * 0.8, 0, 6]];
+    loft(M, st, { x0: x + len, z, seg, mat: 'metal', capB: 'burner', tf: (a, b, c) => [a, b + y, c] });
+    return { x, y, z, r: Math.max(w, h), w, h, flat: true };
+  }
+  const r = p.r, r2 = p.r2 || r * 1.12;
+  const st = [[0, r2, r2, r2], [len * 0.6, r * 1.03, r * 1.03, r * 1.03], [len, r, r, r], [len - 0.05, r * 0.94, r * 0.94, r * 0.94], [len - 0.25, r * 0.8, r * 0.8, r * 0.8]];
+  loft(M, st, { x0: x + len, z, seg, mat: p.mat || 'metal', mats: [p.mat || 'metal', p.mat || 'metal', 'hole', 'hole'], capB: 'burner', tf: (a, b, c) => [a, b + y, c] });
+  return { x, y, z, r, flat: false };
+}
+
+// Contra-rotating turboprop (Tu-95): spinner plus two blade rows. Blades are tagged 0xffff so the
+// renderer can swap them for a blurred disc while turning.
+function propeller(M, p, L, zs = 1) {
+  const x = L / 2 - p.s, z = (p.z || 0) * zs, y = p.y || 0, r = p.r;
+  loft(M, [[0, 0.02, 0.02, 0.02], [0.4, 0.35, 0.35, 0.35], [1.4, 0.5, 0.5, 0.5], [2.2, 0.55, 0.55, 0.55]], { x0: x, z, seg: 12, mat: 'prop', tf: (a, b, c) => [a, b + y, c] });
+  const rows = p.contra ? [0.55, 1.35] : [0.8];
+  rows.forEach((ds, ri) => {
+    for (let b = 0; b < p.blades; b++) {
+      const a = (b / p.blades + ri * 0.125) * Math.PI * 2;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const secs = [0.45, r].map((rr, j) => {
+        const bx = x - ds, by = y + ca * rr, bz = z + sa * rr, w = j ? 0.18 : 0.3;
+        return { le: [bx + w, by, bz], te: [bx - w, by, bz], t: 0.12 };
+      });
+      panel(M, secs, { mat: 'prop', tag: 0xffff });
+    }
+  });
+  return { x: x - 0.9, y, z, r, contra: !!p.contra, blades: p.blades };
+}
+
+// Point on a panel's lower surface at span fraction f and chord fraction c (for hardpoints).
+function panelPoint(secs, f, c) {
+  const z0 = secs[0].le[2], z1 = secs[secs.length - 1].le[2], zt = lerp(z0, z1, f);
+  for (let i = 0; i + 1 < secs.length; i++) {
+    const A = secs[i], B = secs[i + 1];
+    if ((zt - A.le[2]) * (zt - B.le[2]) <= 0 || i + 2 === secs.length) {
+      const u = clamp((zt - A.le[2]) / ((B.le[2] - A.le[2]) || 1), 0, 1);
+      const le = [0, 1, 2].map(k => lerp(A.le[k], B.le[k], u)), te = [0, 1, 2].map(k => lerp(A.te[k], B.te[k], u));
+      const ch = Math.hypot(te[0] - le[0], te[2] - le[2]), t = lerp(A.t, B.t, u);
+      return [lerp(le[0], te[0], c), lerp(le[1], te[1], c) - afT(c) * t * ch, lerp(le[2], te[2], c), ch];
+    }
+  }
+  return [0, 0, 0, 1];
+}
+
+// ---- 20-stores.js
+// Weapons, fuel tanks and pods. Masses and sizes are published figures for the variant named;
+// values marked est are open-source estimates. L length (m), d body diameter (m), fin span (m).
+// shape picks the mesh builder; mat the body colour.
+const STORES = {};
+const S = (key, o) => { STORES[key] = { key, ...o }; };
+
+// Air-to-air missiles
+S('AIM-120C', { name: 'AIM-120C-7 AMRAAM', cat: 'Air-to-air', kg: 161, L: 3.66, d: 0.178, span: 0.45, shape: 'aam', mat: 'white', guide: 'Active radar', range: 'over 100 km', origin: 'US' });
+S('AIM-120D', { name: 'AIM-120D AMRAAM', cat: 'Air-to-air', kg: 161, L: 3.66, d: 0.178, span: 0.45, shape: 'aam', mat: 'white', guide: 'Active radar, two-way datalink', range: 'about 160 km', origin: 'US' });
+S('AIM-9X', { name: 'AIM-9X Sidewinder', cat: 'Air-to-air', kg: 85, L: 3.02, d: 0.127, span: 0.35, shape: 'aam', mat: 'white', guide: 'Imaging infrared, thrust vectoring', range: 'about 35 km', origin: 'US' });
+S('AIM-9M', { name: 'AIM-9M Sidewinder', cat: 'Air-to-air', kg: 86, L: 2.87, d: 0.127, span: 0.63, shape: 'aam', canard: 1, mat: 'white', guide: 'Infrared', range: 'about 18 km', origin: 'US' });
+S('AIM-7M', { name: 'AIM-7M Sparrow', cat: 'Air-to-air', kg: 231, L: 3.66, d: 0.203, span: 1.0, shape: 'aam', wings: 1, mat: 'white', guide: 'Semi-active radar', range: 'about 70 km', origin: 'US' });
+S('AIM-54C', { name: 'AIM-54C Phoenix', cat: 'Air-to-air', kg: 463, L: 3.96, d: 0.38, span: 0.91, shape: 'aam', mat: 'white', guide: 'Semi-active, then active radar', range: 'about 190 km', origin: 'US' });
+S('R-77', { name: 'R-77-1 (RVV-SD)', cat: 'Air-to-air', kg: 190, L: 3.71, d: 0.2, span: 0.7, shape: 'aam', grid: 1, mat: 'white', guide: 'Active radar, grid-fin tail', range: 'about 110 km', origin: 'RU' });
+S('R-73', { name: 'R-73 (AA-11 Archer)', cat: 'Air-to-air', kg: 105, L: 2.9, d: 0.17, span: 0.51, shape: 'aam', canard: 1, mat: 'white', guide: 'Infrared, thrust vectoring', range: 'about 30 km', origin: 'RU' });
+S('R-27ER', { name: 'R-27ER (AA-10 Alamo)', cat: 'Air-to-air', kg: 350, L: 4.78, d: 0.26, span: 0.8, shape: 'aam', wings: 1, mat: 'white', guide: 'Semi-active radar', range: 'about 95 km', origin: 'RU' });
+S('R-60M', { name: 'R-60M (AA-8 Aphid)', cat: 'Air-to-air', kg: 44, L: 2.14, d: 0.12, span: 0.39, shape: 'aam', canard: 1, mat: 'white', guide: 'Infrared', range: 'about 8 km', origin: 'RU' });
+S('R-13M', { name: 'R-13M (AA-2 Atoll)', cat: 'Air-to-air', kg: 90, L: 2.87, d: 0.127, span: 0.53, shape: 'aam', canard: 1, mat: 'white', guide: 'Infrared', range: 'about 15 km', origin: 'RU', est: 1 });
+S('R-33', { name: 'R-33 (AA-9 Amos)', cat: 'Air-to-air', kg: 490, L: 4.15, d: 0.38, span: 1.16, shape: 'aam', wings: 1, mat: 'white', guide: 'Inertial, semi-active radar', range: 'about 160 km', origin: 'RU' });
+S('R-37M', { name: 'R-37M (AA-13 Axehead)', cat: 'Air-to-air', kg: 510, L: 4.2, d: 0.38, span: 0.7, shape: 'aam', mat: 'white', guide: 'Inertial, active radar', range: 'about 300 km', origin: 'RU', est: 1 });
+S('Meteor', { name: 'MBDA Meteor', cat: 'Air-to-air', kg: 190, L: 3.65, d: 0.178, span: 0.4, shape: 'aam', ramjet: 1, mat: 'white', guide: 'Active radar, ramjet', range: 'over 150 km', origin: 'EU' });
+S('MICA', { name: 'MBDA MICA EM', cat: 'Air-to-air', kg: 112, L: 3.1, d: 0.16, span: 0.56, shape: 'aam', wings: 1, mat: 'white', guide: 'Active radar', range: 'about 80 km', origin: 'FR' });
+S('IRIS-T', { name: 'IRIS-T', cat: 'Air-to-air', kg: 87.4, L: 2.94, d: 0.127, span: 0.45, shape: 'aam', mat: 'white', guide: 'Imaging infrared, thrust vectoring', range: 'about 25 km', origin: 'DE' });
+S('Magic 2', { name: 'R.550 Magic 2', cat: 'Air-to-air', kg: 89, L: 2.75, d: 0.157, span: 0.66, shape: 'aam', canard: 1, mat: 'white', guide: 'Infrared', range: 'about 15 km', origin: 'FR' });
+S('PL-15', { name: 'PL-15', cat: 'Air-to-air', kg: 210, L: 4.0, d: 0.203, span: 0.4, shape: 'aam', mat: 'white', guide: 'Active radar (AESA seeker), dual pulse', range: 'about 200 km', origin: 'CN', est: 1 });
+S('PL-10', { name: 'PL-10', cat: 'Air-to-air', kg: 89, L: 3.0, d: 0.16, span: 0.4, shape: 'aam', mat: 'white', guide: 'Imaging infrared, thrust vectoring', range: 'about 20 km', origin: 'CN', est: 1 });
+
+// Air-to-ground: bombs and guided bombs
+S('Mk 82', { name: 'Mk 82 500 lb bomb', cat: 'Bomb', kg: 241, L: 2.22, d: 0.273, span: 0.38, shape: 'bomb', mat: 'olive', guide: 'Unguided', origin: 'US' });
+S('Mk 84', { name: 'Mk 84 2,000 lb bomb', cat: 'Bomb', kg: 925, L: 3.28, d: 0.458, span: 0.64, shape: 'bomb', mat: 'olive', guide: 'Unguided', origin: 'US' });
+S('GBU-12', { name: 'GBU-12 Paveway II', cat: 'Guided bomb', kg: 230, L: 3.27, d: 0.273, span: 1.49, shape: 'lgb', mat: 'olive', guide: 'Laser', origin: 'US' });
+S('GBU-10', { name: 'GBU-10 Paveway II', cat: 'Guided bomb', kg: 934, L: 4.35, d: 0.458, span: 1.68, shape: 'lgb', mat: 'olive', guide: 'Laser', origin: 'US' });
+S('GBU-38', { name: 'GBU-38 JDAM (500 lb)', cat: 'Guided bomb', kg: 253, L: 2.35, d: 0.273, span: 0.45, shape: 'jdam', mat: 'olive', guide: 'GPS / INS', range: 'up to 24 km', origin: 'US' });
+S('GBU-32', { name: 'GBU-32 JDAM (1,000 lb)', cat: 'Guided bomb', kg: 460, L: 3.04, d: 0.36, span: 0.5, shape: 'jdam', mat: 'olive', guide: 'GPS / INS', range: 'up to 24 km', origin: 'US' });
+S('GBU-31', { name: 'GBU-31 JDAM (2,000 lb)', cat: 'Guided bomb', kg: 934, L: 3.88, d: 0.458, span: 0.64, shape: 'jdam', mat: 'olive', guide: 'GPS / INS', range: 'up to 28 km', origin: 'US' });
+S('GBU-39', { name: 'GBU-39 Small Diameter Bomb', cat: 'Guided bomb', kg: 129, L: 1.8, d: 0.19, span: 0.2, shape: 'sdb', mat: 'white', guide: 'GPS / INS, pop-out wings', range: 'over 110 km', origin: 'US' });
+S('GBU-57', { name: 'GBU-57 Massive Ordnance Penetrator', cat: 'Guided bomb', kg: 13600, L: 6.2, d: 0.8, span: 1.6, shape: 'jdam', mat: 'olive', guide: 'GPS / INS', note: 'Bunker buster: over 60 m of earth.', origin: 'US' });
+S('CBU-97', { name: 'CBU-97 Sensor Fuzed Weapon', cat: 'Cluster bomb', kg: 420, L: 2.34, d: 0.4, span: 0.6, shape: 'bomb', mat: 'olive', guide: 'Unguided dispenser, 40 guided skeets', origin: 'US' });
+S('B61', { name: 'B61-12 nuclear bomb', cat: 'Nuclear', kg: 374, L: 3.6, d: 0.34, span: 0.5, shape: 'jdam', mat: 'white', guide: 'INS tail kit', note: 'Variable yield.', origin: 'US', est: 1 });
+S('B83', { name: 'B83 nuclear bomb', cat: 'Nuclear', kg: 1100, L: 3.7, d: 0.46, span: 0.6, shape: 'bomb', mat: 'white', guide: 'Parachute retarded', note: 'Up to 1.2 megatons.', origin: 'US' });
+S('Paveway IV', { name: 'Paveway IV', cat: 'Guided bomb', kg: 227, L: 3.3, d: 0.273, span: 0.9, shape: 'lgb', mat: 'olive', guide: 'GPS / INS and laser', origin: 'UK', est: 1 });
+S('AASM', { name: 'AASM Hammer (SBU-38)', cat: 'Guided bomb', kg: 340, L: 3.1, d: 0.3, span: 0.9, shape: 'lgb', mat: 'sand', guide: 'GPS / INS, rocket boosted', range: 'up to 70 km', origin: 'FR' });
+S('1000 lb MC', { name: '1,000 lb MC bomb', cat: 'Bomb', kg: 454, L: 2.2, d: 0.43, span: 0.5, shape: 'bomb', mat: 'olive', guide: 'Unguided', origin: 'UK', est: 1 });
+S('FAB-500', { name: 'FAB-500 M-62', cat: 'Bomb', kg: 500, L: 2.47, d: 0.4, span: 0.6, shape: 'bomb', mat: 'olive', guide: 'Unguided', origin: 'RU' });
+S('FAB-250', { name: 'FAB-250 M-62', cat: 'Bomb', kg: 250, L: 1.96, d: 0.325, span: 0.45, shape: 'bomb', mat: 'olive', guide: 'Unguided', origin: 'RU' });
+S('KAB-500L', { name: 'KAB-500L', cat: 'Guided bomb', kg: 525, L: 3.05, d: 0.35, span: 0.75, shape: 'lgb', mat: 'olive', guide: 'Laser', origin: 'RU' });
+
+S('Super 530D', { name: 'Super 530D', cat: 'Air-to-air', kg: 270, L: 3.8, d: 0.263, span: 0.62, shape: 'aam', mat: 'white', guide: 'Semi-active radar', range: 'about 40 km', origin: 'FR' });
+
+// Air-to-surface missiles
+S('AGM-88', { name: 'AGM-88E AARGM', cat: 'Anti-radiation', kg: 361, L: 4.17, d: 0.254, span: 1.13, shape: 'aam', wings: 1, mat: 'white', guide: 'Passive radar homing, GPS, radar', range: 'over 110 km', origin: 'US' });
+S('AGM-65', { name: 'AGM-65G Maverick', cat: 'Air-to-surface', kg: 304, L: 2.49, d: 0.3, span: 0.72, shape: 'aam', wings: 1, glass: 1, mat: 'white', guide: 'Imaging infrared', range: 'about 22 km', origin: 'US' });
+S('AGM-84', { name: 'AGM-84 Harpoon', cat: 'Anti-ship', kg: 519, L: 3.84, d: 0.34, span: 0.91, shape: 'aam', wings: 1, mat: 'white', guide: 'Active radar, sea skimming', range: 'about 220 km', origin: 'US' });
+S('AGM-158', { name: 'AGM-158 JASSM', cat: 'Cruise missile', kg: 1020, L: 4.27, d: 0.55, h: 0.45, span: 0.9, shape: 'cruise', mat: 'skin2', guide: 'GPS / INS, infrared terminal', range: 'about 370 km (ER: 925 km)', origin: 'US' });
+S('AGM-86B', { name: 'AGM-86B ALCM', cat: 'Cruise missile', kg: 1430, L: 6.32, d: 0.62, span: 1.2, shape: 'cruise', mat: 'white', guide: 'INS, terrain contour matching', range: 'about 2,400 km', note: 'Nuclear armed.', origin: 'US' });
+S('Storm Shadow', { name: 'Storm Shadow / SCALP-EG', cat: 'Cruise missile', kg: 1300, L: 5.1, d: 0.63, h: 0.48, span: 0.9, shape: 'cruise', mat: 'skin2', guide: 'INS, GPS, terrain matching, infrared', range: 'about 560 km', origin: 'UK/FR' });
+S('Taurus', { name: 'Taurus KEPD 350', cat: 'Cruise missile', kg: 1400, L: 5.1, d: 0.63, h: 0.32, span: 1.0, shape: 'cruise', mat: 'skin2', guide: 'INS, GPS, terrain matching, infrared', range: 'about 500 km', origin: 'DE/SE' });
+S('ASMP-A', { name: 'ASMP-A', cat: 'Nuclear', kg: 860, L: 5.38, d: 0.38, span: 0.9, shape: 'aam', ramjet: 1, mat: 'white', guide: 'Inertial, ramjet', range: 'about 500 km', note: '300 kt warhead.', origin: 'FR', est: 1 });
+S('Brimstone', { name: 'Brimstone (3-round launcher)', cat: 'Air-to-surface', kg: 150, L: 1.8, d: 0.3, span: 0.4, shape: 'pod', mat: 'skin2', guide: 'Millimetre-wave radar, laser', range: 'about 20 km', note: 'Launcher with three 48.5 kg missiles.', origin: 'UK', est: 1 });
+S('RBS 15F', { name: 'RBS 15F', cat: 'Anti-ship', kg: 800, L: 4.35, d: 0.5, span: 1.4, shape: 'cruise', mat: 'white', guide: 'Inertial, active radar', range: 'over 200 km', origin: 'SE' });
+S('Kh-31P', { name: 'Kh-31P (AS-17 Krypton)', cat: 'Anti-radiation', kg: 600, L: 4.7, d: 0.36, span: 0.91, shape: 'aam', wings: 1, ramjet: 1, mat: 'white', guide: 'Passive radar, ramjet', range: 'about 110 km', origin: 'RU' });
+S('Kh-59MK2', { name: 'Kh-59MK2', cat: 'Cruise missile', kg: 770, L: 4.2, d: 0.38, span: 1.3, shape: 'cruise', mat: 'white', guide: 'INS, GLONASS, optical', range: 'about 290 km', origin: 'RU', est: 1 });
+S('Kh-55', { name: 'Kh-55 (AS-15 Kent)', cat: 'Cruise missile', kg: 1185, L: 6.04, d: 0.514, span: 1.0, shape: 'cruise', mat: 'white', guide: 'INS, terrain matching', range: 'about 2,500 km', note: 'Nuclear armed.', origin: 'RU' });
+S('Kh-101', { name: 'Kh-101', cat: 'Cruise missile', kg: 2400, L: 7.45, d: 0.74, h: 0.6, span: 1.2, shape: 'cruise', mat: 'white', guide: 'INS, GLONASS, optical terminal', range: 'about 2,800 km', origin: 'RU', est: 1 });
+S('Kh-22', { name: 'Kh-22 (AS-4 Kitchen)', cat: 'Anti-ship', kg: 5820, L: 11.67, d: 0.92, span: 3.0, shape: 'heavy', mat: 'metal', guide: 'Inertial, active radar', range: 'about 600 km', note: 'Liquid-fuel rocket, Mach 4.6.', origin: 'RU' });
+S('Kh-47M2', { name: 'Kh-47M2 Kinzhal', cat: 'Air-launched ballistic', kg: 4300, L: 7.2, d: 1.0, span: 1.3, shape: 'aam', mat: 'white', guide: 'Inertial, GLONASS, optical', range: 'about 2,000 km (claimed)', note: 'Air-launched ballistic missile.', origin: 'RU', est: 1 });
+S('Kh-15', { name: 'Kh-15 (AS-16 Kickback)', cat: 'Nuclear', kg: 1200, L: 4.78, d: 0.455, span: 0.92, shape: 'aam', mat: 'white', guide: 'Inertial', range: 'about 300 km', origin: 'RU' });
+S('Blue Steel', { name: 'Avro Blue Steel', cat: 'Nuclear', kg: 7700, L: 10.7, d: 1.27, span: 4.0, shape: 'heavy', mat: 'white', guide: 'Inertial', range: 'about 240 km', note: '1.1 megaton warhead. Retired 1970.', origin: 'UK' });
+S('YJ-12', { name: 'YJ-12', cat: 'Anti-ship', kg: 2500, L: 6.3, d: 0.6, span: 1.4, shape: 'aam', ramjet: 1, mat: 'white', guide: 'Inertial, active radar', range: 'about 400 km', origin: 'CN', est: 1 });
+
+// Fuel tanks (kg = empty tank, fuel = JP-8 at 0.80 kg/L) and pods
+S('Tank 600', { name: '600 US gal drop tank', cat: 'Fuel tank', kg: 180, fuel: 1817, L: 5.9, d: 0.84, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 610', { name: '610 US gal drop tank', cat: 'Fuel tank', kg: 180, fuel: 1847, L: 6.1, d: 0.84, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 480', { name: '480 US gal drop tank', cat: 'Fuel tank', kg: 160, fuel: 1453, L: 5.5, d: 0.72, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 370', { name: '370 US gal drop tank', cat: 'Fuel tank', kg: 145, fuel: 1120, L: 4.9, d: 0.68, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 330', { name: '330 US gal drop tank', cat: 'Fuel tank', kg: 130, fuel: 1000, L: 4.9, d: 0.66, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 300', { name: '300 US gal drop tank', cat: 'Fuel tank', kg: 120, fuel: 908, L: 4.4, d: 0.63, shape: 'tank', mat: 'tank', origin: 'US', est: 1 });
+S('Tank 1000L', { name: '1,000 L drop tank', cat: 'Fuel tank', kg: 110, fuel: 800, L: 4.2, d: 0.6, shape: 'tank', mat: 'tank', origin: 'EU', est: 1 });
+S('Tank 1250L', { name: '1,250 L drop tank', cat: 'Fuel tank', kg: 120, fuel: 1000, L: 4.6, d: 0.64, shape: 'tank', mat: 'tank', origin: 'FR', est: 1 });
+S('Tank 2000L', { name: '2,000 L drop tank', cat: 'Fuel tank', kg: 170, fuel: 1600, L: 5.6, d: 0.78, shape: 'tank', mat: 'tank', origin: 'FR', est: 1 });
+S('PTB-1500', { name: 'PTB-1500 centreline tank', cat: 'Fuel tank', kg: 160, fuel: 1200, L: 5.4, d: 0.72, shape: 'tank', mat: 'tank', origin: 'RU', est: 1 });
+S('PTB-2000', { name: 'PTB-2000 drop tank', cat: 'Fuel tank', kg: 190, fuel: 1600, L: 5.8, d: 0.8, shape: 'tank', mat: 'tank', origin: 'RU', est: 1 });
+S('PTB-2500', { name: 'PTB-2500 drop tank', cat: 'Fuel tank', kg: 220, fuel: 2000, L: 6.6, d: 0.85, shape: 'tank', mat: 'tank', origin: 'RU', est: 1 });
+S('PTB-490', { name: 'PTB-490 drop tank', cat: 'Fuel tank', kg: 70, fuel: 390, L: 3.3, d: 0.5, shape: 'tank', mat: 'tank', origin: 'RU', est: 1 });
+S('PTB-800', { name: 'PTB-800 centreline tank', cat: 'Fuel tank', kg: 100, fuel: 640, L: 4.0, d: 0.56, shape: 'tank', mat: 'tank', origin: 'RU', est: 1 });
+S('Tank 1300L', { name: '1,300 L drop tank', cat: 'Fuel tank', kg: 125, fuel: 1040, L: 4.9, d: 0.64, shape: 'tank', mat: 'tank', origin: 'FR', est: 1 });
+S('Tank 1500L', { name: '1,500 L drop tank', cat: 'Fuel tank', kg: 140, fuel: 1200, L: 5.2, d: 0.68, shape: 'tank', mat: 'tank', origin: 'EU', est: 1 });
+S('Tank 1100L', { name: '1,100 L drop tank', cat: 'Fuel tank', kg: 115, fuel: 880, L: 4.4, d: 0.62, shape: 'tank', mat: 'tank', origin: 'SE', est: 1 });
+S('Sniper', { name: 'AN/AAQ-33 Sniper ATP', cat: 'Targeting pod', kg: 202, L: 2.39, d: 0.3, shape: 'pod', mat: 'skin2', guide: 'Laser designator, FLIR, TV', origin: 'US' });
+S('LITENING', { name: 'LITENING targeting pod', cat: 'Targeting pod', kg: 200, L: 2.2, d: 0.41, shape: 'pod', mat: 'skin2', guide: 'Laser designator, FLIR', origin: 'IL/US' });
+S('TALIOS', { name: 'TALIOS targeting pod', cat: 'Targeting pod', kg: 265, L: 2.5, d: 0.35, shape: 'pod', mat: 'skin2', guide: 'Laser designator, FLIR', origin: 'FR', est: 1 });
+S('HTS', { name: 'AN/ASQ-213 HARM Targeting System', cat: 'Sensor pod', kg: 45, L: 1.44, d: 0.2, shape: 'pod', mat: 'skin2', guide: 'Radar emitter location', origin: 'US' });
+S('ALQ-184', { name: 'AN/ALQ-184 ECM pod', cat: 'Jamming pod', kg: 215, L: 3.95, d: 0.3, shape: 'pod', mat: 'skin2', guide: 'Self-protection jamming', origin: 'US', est: 1 });
+S('LANTIRN', { name: 'AN/AAQ-13/14 LANTIRN', cat: 'Targeting pod', kg: 236, L: 2.5, d: 0.38, shape: 'pod', mat: 'skin2', guide: 'Navigation FLIR, laser designator', origin: 'US' });
+S('Khibiny', { name: 'L175V Khibiny wingtip pod', cat: 'Jamming pod', kg: 90, L: 2.3, d: 0.25, shape: 'pod', mat: 'skin2', guide: 'Electronic warfare', origin: 'RU', est: 1 });
+S('ATFLIR', { name: 'AN/ASQ-228 ATFLIR', cat: 'Targeting pod', kg: 191, L: 1.83, d: 0.33, shape: 'pod', mat: 'skin2', guide: 'Laser designator, FLIR', origin: 'US' });
+S('Tank 2250L', { name: '2,250 L drop tank', cat: 'Fuel tank', kg: 190, fuel: 1800, L: 6.3, d: 0.8, shape: 'tank', mat: 'tank', origin: 'UK/DE', est: 1 });
+S('Rack SDB', { name: 'BRU-61 rack with 4 GBU-39', cat: 'Guided bomb', kg: 4 * 129 + 145, L: 3.6, d: 0.4, shape: 'sdbrack', mat: 'white', guide: 'GPS / INS', range: 'over 110 km', origin: 'US', note: 'Four Small Diameter Bombs on one rack.' });
+
+const STORE_CATS = ['Air-to-air', 'Air-to-surface', 'Anti-radiation', 'Anti-ship', 'Cruise missile', 'Air-launched ballistic', 'Guided bomb', 'Bomb', 'Cluster bomb', 'Nuclear', 'Fuel tank', 'Targeting pod', 'Sensor pod', 'Jamming pod'];
+
+// ---- store meshes, built in store space: nose at x = 0, body along -x, axis at y = z = 0.
+function fins(M, xRoot, chordR, chordT, rIn, rOut, sweep, mat, tf, tag, roll = Math.PI / 4, n = 4, t = 0.06) {
+  for (let k = 0; k < n; k++) {
+    const a = roll + (k / n) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+    const sec = (r, ch, off) => ({ le: [xRoot - off, ca * r, sa * r], te: [xRoot - off - ch, ca * r, sa * r], t });
+    panel(M, [sec(rIn, chordR, 0), sec(rOut, chordT, (rOut - rIn) * Math.tan(sweep * D2R))], { mat, tf, tag });
+  }
+}
+
+function storeMesh(M, st, tf, tag) {
+  const L = st.L, r = st.d / 2, sp = (st.span || st.d * 1.4) / 2, mat = st.mat, seg = 10;
+  const o = { seg, mat, tf, tag };
+  switch (st.shape) {
+    case 'aam': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.04, r * 0.55, r * 0.55, r * 0.55], [L * 0.1, r * 0.92, r * 0.92, r * 0.92], [L * 0.16, r, r, r], [L * 0.97, r, r, r], [L, r * 0.8, r * 0.8, r * 0.8]],
+        { ...o, mats: [st.glass ? 'seeker' : mat, st.glass ? 'seeker' : mat, 'band', mat, mat], capB: 'hole' });
+      if (st.ramjet) for (const a of [0.8, 2.35]) loft(M, [[L * 0.45, 0.01, 0.01, 0.01], [L * 0.52, r * 0.35, r * 0.35, r * 0.35], [L * 0.9, r * 0.35, r * 0.35, r * 0.35]],
+        { ...o, seg: 6, capF: 'hole', tf: (x, y, z) => tf(x, y + r * Math.cos(a), z + r * Math.sin(a)) });
+      fins(M, -L * 0.86, L * 0.12, L * 0.06, r, sp, 35, mat, tf, tag, st.grid ? 0 : Math.PI / 4);
+      if (st.wings) fins(M, -L * 0.3, L * 0.2, L * 0.04, r, Math.max(sp * 0.9, r * 2.2), 50, mat, tf, tag);
+      if (st.canard) fins(M, -L * 0.1, L * 0.05, L * 0.03, r, r * 2.3, 30, mat, tf, tag);
+      break;
+    }
+    case 'bomb': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.06, r * 0.5, r * 0.5, r * 0.5], [L * 0.22, r * 0.93, r * 0.93, r * 0.93], [L * 0.45, r, r, r], [L * 0.62, r * 0.95, r * 0.95, r * 0.95], [L * 0.86, r * 0.45, r * 0.45, r * 0.45], [L, r * 0.35, r * 0.35, r * 0.35]],
+        { ...o, mats: [mat, 'band', mat, mat, mat, mat] });
+      fins(M, -L * 0.74, L * 0.24, L * 0.2, r * 0.45, sp, 5, mat, tf, tag);
+      break;
+    }
+    case 'jdam': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.06, r * 0.5, r * 0.5, r * 0.5], [L * 0.2, r * 0.93, r * 0.93, r * 0.93], [L * 0.42, r, r, r], [L * 0.6, r * 0.96, r * 0.96, r * 0.96], [L * 0.72, r * 0.72, r * 0.72, r * 0.72], [L * 0.98, r * 0.72, r * 0.72, r * 0.72], [L, r * 0.5, r * 0.5, r * 0.5]],
+        { ...o, mats: [mat, 'band', mat, mat, mat, 'skin2', 'skin2'] });
+      fins(M, -L * 0.8, L * 0.18, L * 0.14, r * 0.72, sp, 10, 'skin2', tf, tag);
+      break;
+    }
+    case 'lgb': {
+      loft(M, [[0, r * 0.3, r * 0.3, r * 0.3], [L * 0.1, r * 0.55, r * 0.55, r * 0.55], [L * 0.2, r * 0.6, r * 0.6, r * 0.6], [L * 0.28, r * 0.93, r * 0.93, r * 0.93], [L * 0.5, r, r, r], [L * 0.7, r * 0.95, r * 0.95, r * 0.95], [L * 0.85, r * 0.55, r * 0.55, r * 0.55], [L, r * 0.5, r * 0.5, r * 0.5]],
+        { ...o, capF: 'seeker', mats: ['seeker', mat, mat, 'band', mat, mat, mat] });
+      fins(M, -L * 0.12, L * 0.08, L * 0.04, r * 0.55, r * 1.6, 30, mat, tf, tag);
+      fins(M, -L * 0.82, L * 0.16, L * 0.1, r * 0.5, sp, 25, mat, tf, tag);
+      break;
+    }
+    case 'sdb': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.12, r * 0.8, r * 0.8, r * 0.8], [L * 0.3, r, r, r], [L * 0.9, r, r, r], [L, r * 0.6, r * 0.6, r * 0.6]], { ...o, seg: 8, rot: Math.PI / 4 });
+      fins(M, -L * 0.9, L * 0.1, L * 0.06, r, r * 1.7, 30, mat, tf, tag);
+      break;
+    }
+    case 'sdbrack': {
+      loft(M, [[0, 0.02, 0.05, 0.02], [0.3, 0.12, 0.1, 0.08], [L - 0.3, 0.12, 0.1, 0.08], [L, 0.02, 0.05, 0.02]], { ...o, mat: 'skin2', seg: 8 });
+      const sd = STORES['GBU-39'];
+      for (const [dx, dz] of [[0, -1], [0, 1], [-1.85, -1], [-1.85, 1]])
+        storeMesh(M, sd, (x, y, z) => tf(x + dx - 0.02, y - 0.22, z + dz * 0.12), tag);
+      break;
+    }
+    case 'tank': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.08, r * 0.55, r * 0.55, r * 0.55], [L * 0.25, r * 0.95, r * 0.95, r * 0.95], [L * 0.45, r, r, r], [L * 0.7, r * 0.9, r * 0.9, r * 0.9], [L * 0.92, r * 0.4, r * 0.4, r * 0.4], [L, 0.02, 0.02, 0.02]], o);
+      fins(M, -L * 0.8, L * 0.14, L * 0.08, r * 0.5, r * 1.1, 30, mat, tf, tag, 0, 3);
+      break;
+    }
+    case 'pod': {
+      loft(M, [[0, r * 0.7, r * 0.7, r * 0.7], [L * 0.05, r * 0.95, r * 0.95, r * 0.95], [L * 0.15, r, r, r], [L * 0.92, r, r, r], [L, r * 0.6, r * 0.6, r * 0.6]], { ...o, capF: 'seeker', mats: ['seeker', mat, mat, mat] });
+      break;
+    }
+    case 'cruise': {
+      const w = r, h = (st.h || st.d) / 2;
+      loft(M, [[0, 0.02, 0.02, 0.02], [L * 0.05, w * 0.7, h * 0.6, h * 0.7], [L * 0.15, w, h, h], [L * 0.85, w, h, h], [L, w * 0.6, h * 0.5, h * 0.5]], { ...o, seg: 12, capF: mat });
+      const k = [[-L * 0.85, h, 0], [-L * 0.85, -h * 0.2, w], [-L * 0.85, -h * 0.2, -w]];
+      for (const [x, y, z] of k) {
+        const up = z === 0, dz = up ? 0 : Math.sign(z) * sp * 0.7, dy = up ? sp * 0.6 : -sp * 0.2;
+        panel(M, [{ le: [x, y, z], te: [x - L * 0.12, y, z], t: 0.07 }, { le: [x - L * 0.05, y + dy, z + dz], te: [x - L * 0.13, y + dy, z + dz], t: 0.07 }], { mat, tf, tag });
+      }
+      break;
+    }
+    case 'heavy': {
+      loft(M, [[0, 0.01, 0.01, 0.01], [L * 0.1, r * 0.7, r * 0.7, r * 0.7], [L * 0.25, r, r, r], [L * 0.95, r, r, r], [L, r * 0.8, r * 0.8, r * 0.8]], { ...o, seg: 14, capB: 'hole' });
+      fins(M, -L * 0.45, L * 0.35, L * 0.05, r, sp, 60, mat, tf, tag, 0, 2);
+      fins(M, -L * 0.82, L * 0.16, L * 0.06, r, r + sp * 0.5, 45, mat, tf, tag, Math.PI / 2, 2);
+      fins(M, -L * 0.82, L * 0.16, L * 0.06, r, r + sp * 0.35, 45, mat, tf, tag, -Math.PI / 2, 1);
+      break;
+    }
+  }
+}
+
+// ---- 30-scene.js
+// Scene assembly: airframe parts + stations + stores -> one mesh, exhaust sources and label anchors.
+
+const normLoad = v => v == null ? null : Array.isArray(v) ? { key: v[0], n: v[1] || 1 } : { key: v, n: 1 };
+
+// Expand stations into instances (mirrored stations give a left and a right).
+function stationInstances(ac, secsByName) {
+  const out = [];
+  for (const st of ac.stations || []) {
+    let p;
+    if (st.on) {
+      const secs = secsByName[st.on];
+      const [x, y, z, ch] = panelPoint(secs, st.f, st.c ?? 0.35);
+      p = [x, y, z]; st._ch = ch;
+    } else p = [ac.dims.len / 2 - st.at[0], st.at[1], st.at[2] || 0];
+    if (st.side === -1) p[2] = -p[2];
+    out.push({ st, p, side: st.mirror ? 'R' : '', idx: out.length });
+    if (st.mirror) out.push({ st, p: [p[0], p[1], -p[2]], side: 'L', idx: out.length });
+  }
+  return out;
+}
+
+// Offsets of each store's centre from the station anchor, plus a roll about the store axis.
+function arrange(n, S, st) {
+  const r = S.d / 2, fin = (S.span || S.d) / 2, kind = st.kind || 'pylon';
+  if (kind === 'rail') return [[0, 0, 0, 0]];
+  if (kind === 'semi') return Array.from({ length: n }, (_, i) => [(i - (n - 1) / 2) * (S.L + 0.2), -r * 0.45, 0, Math.PI / 4]);
+  if (kind === 'conf') return Array.from({ length: n }, (_, i) => [(i - (n - 1) / 2) * (S.L + 0.2), -r - 0.12, 0, Math.PI / 4]);
+  if (kind === 'bay') {
+    const b = st.bay, pitch = Math.max(S.d, fin * 1.45) + 0.06;
+    if (b.arr === 'rotary' && n <= 8) {
+      const R = n > 1 ? Math.max(pitch / 2 / Math.sin(Math.PI / n), r + 0.3) : 0, cy = -(R + pitch / 2 + 0.05);
+      return Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2; return [0, cy + Math.cos(a) * R, Math.sin(a) * R, a + Math.PI / 4]; });
+    }
+    const cols = Math.max(1, Math.floor((b.w - 0.1) / pitch)), tand = Math.max(1, Math.floor((b.len + 0.1) / (S.L + 0.15)));
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const c = i % cols, t = Math.floor(i / cols) % tand, l = Math.floor(i / (cols * tand));
+      const inRow = Math.min(cols, n - Math.floor(i / cols) * cols);
+      out.push([(t - (Math.min(tand, Math.ceil(n / cols)) - 1) / 2) * (S.L + 0.15), -(r + 0.06) - l * pitch, (c - (inRow - 1) / 2) * pitch, Math.PI / 4]);
+    }
+    return out;
+  }
+  // pylon: single, twin, triple ejector rack, then tandem groups of three
+  const base = -(st.drop ?? 0.32);
+  if (n === 1) return [[0, base - r, 0, Math.PI / 4]];
+  const w = Math.max(r, fin * 0.72) + 0.05;
+  if (n === 2) return [[0, base - r - 0.06, -w, Math.PI / 4], [0, base - r - 0.06, w, Math.PI / 4]];
+  const groups = Math.ceil(n / 3), out = [];
+  for (let g = 0; g < groups; g++) {
+    const dx = (g - (groups - 1) / 2) * (S.L * 1.02), m = Math.min(3, n - g * 3);
+    const tri = [[dx, base - r - 0.1, -w], [dx, base - r - 0.1, w], [dx, base - r * 3 - 0.2, 0]];
+    for (let k = 0; k < m; k++) out.push([...tri[k], Math.PI / 4]);
+  }
+  return out;
+}
+
+function buildScene(ac, o = {}) {
+  const L = ac.dims.len, M = new Mesh(), exhausts = [], props = [];
+  const sweep = o.sweep ?? ac.sweep?.def;
+  const secsByName = {};
+  const bays = o.bays ?? false;
+  const load = o.loadout || {};
+
+  // Airframe
+  for (const p of ac.geo) {
+    for (const zs of p.mirror ? [1, -1] : [1]) {
+      if (p.t === 'loft') {
+        let st = p.st;
+        if (p.fine) { // resample long fuselages so bay cutouts stay close to the bay outline
+          const out = [st[0]];
+          for (let i = 1; i < st.length; i++) {
+            const a = st[i - 1], b = st[i], k = Math.max(1, Math.ceil((b[0] - a[0]) / p.fine));
+            for (let j = 1; j <= k; j++) out.push(a.map((v, q) => q === 5 ? lerp(a[5] ?? 2, b[5] ?? 2, j / k) : lerp(v ?? (q === 4 ? 0 : 2), b[q] ?? (q === 4 ? 0 : 2), j / k)));
+          }
+          st = out;
+        }
+        loft(M, st, { x0: L / 2, z: (p.z || 0) * zs, seg: p.seg, mat: p.mat, mats: p.mats, capF: p.capF, capB: p.capB, tf: p.tf });
+      } else if (p.t === 'panel') {
+        let secs = panelSections(p, L, sweep);
+        if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
+        if (p.name && zs > 0) secsByName[p.name] = secs;
+        panel(M, secs, { mat: p.mat });
+      } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
+      else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
+    }
+  }
+
+  // Stations and stores
+  const inst = stationInstances(ac, secsByName), labels = [];
+  const cut = [];
+  inst.forEach((I, k) => {
+    const st = I.st, ld = normLoad(load[st.id]);
+    const S = ld && STORES[ld.key];
+    const tag = k + 1;
+    const [ax, ay, az] = I.p;
+    if (st.kind === 'bay') {
+      if (!bays) { if (S) labels.push({ tag, st, side: I.side, S, n: ld.n, p: [ax, ay - 0.3, az], hidden: true }); return; }
+      const b = st.bay, h = b.h ?? 0.8;
+      cut.push({ x0: ax - b.len / 2, x1: ax + b.len / 2, z: az, w: b.w / 2, y: ay });
+      // cavity walls and ceiling
+      const x0 = ax - b.len / 2, x1 = ax + b.len / 2, z0 = az - b.w / 2, z1 = az + b.w / 2, yb = ay - h;
+      const q = (pts, m) => { const ids = pts.map(p => M.vert(...p)); M.quad(ids[0], ids[1], ids[2], ids[3], m, 0); };
+      q([[x0, ay, z0], [x1, ay, z0], [x1, ay, z1], [x0, ay, z1]], 'bay');
+      q([[x0, ay, z0], [x1, ay, z0], [x1, yb, z0], [x0, yb, z0]], 'bay');
+      q([[x0, ay, z1], [x1, ay, z1], [x1, yb, z1], [x0, yb, z1]], 'bay');
+      q([[x0, ay, z0], [x0, ay, z1], [x0, yb, z1], [x0, yb, z0]], 'bay');
+      q([[x1, ay, z0], [x1, ay, z1], [x1, yb, z1], [x1, yb, z0]], 'bay');
+      if (b.doors !== false) {
+        const dh = Math.min(b.w * 0.5, 1.6), sp = 0.25;
+        for (const [ze, sg] of [[z0, -1], [z1, 1]])
+          q([[x0, yb, ze], [x1, yb, ze], [x1, yb - dh, ze + sg * dh * sp], [x0, yb - dh, ze + sg * dh * sp]], 'door');
+      }
+    }
+    if (!S) {
+      if (st.fixed && st.kind !== 'bay' && st.kind !== 'rail') pylon(M, ax, ay, az, st.drop ?? 0.32, 1.6, tag);
+      return;
+    }
+    const n = ld.n, offs = arrange(n, S, st);
+    if ((st.kind || 'pylon') === 'pylon') pylon(M, ax, ay, az, (st.drop ?? 0.32) + (n > 2 ? 0.08 : 0), clamp(S.L * 0.55, 0.9, 3.2), tag);
+    if (st.kind === 'rail') { const id = [M.vert(ax + S.L * 0.3, ay, az), M.vert(ax - S.L * 0.35, ay, az), M.vert(ax - S.L * 0.35, ay - 0.08, az), M.vert(ax + S.L * 0.3, ay - 0.08, az)]; M.quad(...id, 'dark', tag); }
+    let cy = 0;
+    for (const [dx, dy, dz, roll] of offs) {
+      const cx = ax + dx, yy = ay + dy, zz = az + (st.kind === 'rail' ? Math.sign(az) * (S.d / 2 + 0.02) : 0) + dz;
+      const cr = Math.cos(roll), sr = Math.sin(roll);
+      storeMesh(M, S, (x, y, z) => [cx + S.L / 2 + x, yy + y * cr - z * sr, zz + y * sr + z * cr], tag);
+      cy += yy;
+    }
+    labels.push({ tag, st, side: I.side, S, n, p: [ax, cy / offs.length, az] });
+  });
+
+  // Cut open bays: drop airframe skin triangles in the bay footprint below the ceiling.
+  if (cut.length) {
+    const V = M.v, T = M.t, keep = { t: [], m: [], g: [] };
+    for (let i = 0; i < M.m.length; i++) {
+      const a = T[i * 3] * 3, b = T[i * 3 + 1] * 3, c = T[i * 3 + 2] * 3;
+      const x = (V[a] + V[b] + V[c]) / 3, y = (V[a + 1] + V[b + 1] + V[c + 1]) / 3, z = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
+      const skin = M.g[i] === 0 && (M.m[i] === MAT_ID.skin || M.m[i] === MAT_ID.skin2 || M.m[i] === MAT_ID.dark);
+      if (skin && cut.some(k => x > k.x0 && x < k.x1 && Math.abs(z - k.z) < k.w && y < k.y + 0.05)) continue;
+      keep.t.push(T[i * 3], T[i * 3 + 1], T[i * 3 + 2]); keep.m.push(M.m[i]); keep.g.push(M.g[i]);
+    }
+    M.t = keep.t; M.m = keep.m; M.g = keep.g;
+  }
+
+  const mesh = M.finish();
+  let R = 0, minY = 0;
+  for (let i = 0; i < mesh.V.length; i += 3) {
+    R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
+    minY = Math.min(minY, mesh.V[i + 1]);
+  }
+  return { mesh, exhausts, props, labels, inst, R, minY };
+}
+
+function pylon(M, x, y, z, h, ch, tag) {
+  panel(M, [{ le: [x + ch / 2, y + 0.05, z], te: [x - ch / 2, y + 0.05, z], t: 0.1 }, { le: [x + ch / 2 - 0.1, y - h, z], te: [x - ch / 2 + 0.05, y - h, z], t: 0.1 }].map(s => ({ ...s, le: [s.le[0], s.le[1], s.le[2]], te: [s.te[0], s.te[1], s.te[2]] })), { mat: 'skin2', tag });
+}
+
+// ---- weights and engine model
+
+// Mass of a loadout: stores, fuel carried in drop tanks, and per-station entries.
+function loadoutMass(ac, load) {
+  let kg = 0, fuel = 0, n = 0;
+  const rows = [];
+  for (const st of ac.stations || []) {
+    const ld = normLoad(load[st.id]);
+    if (!ld || !STORES[ld.key]) continue;
+    const S = STORES[ld.key], sides = st.mirror ? 2 : 1, cnt = ld.n * sides;
+    kg += S.kg * cnt; fuel += (S.fuel || 0) * cnt; n += cnt;
+    rows.push({ st, S, n: ld.n, sides, kg: (S.kg + (S.fuel || 0)) * cnt });
+  }
+  return { kg, fuel, n, rows };
+}
+
+// Throttle 0..1. Afterburning engines reach military power at 0.7 and full afterburner at 1.
+// Sea-level static figures; fuel flow uses typical specific fuel consumption for the engine type.
+const MIL = 0.7;
+function perfAt(ac, thr, load, fuelFrac = 1) {
+  const e = ac.eng, ab = !!e.wet, mil = ab ? MIL : 1;
+  let T, sfc, zone = 0, state;
+  const [sd, sw] = e.sfc || (ab ? [0.76, 2.0] : [0.6, 0.6]);
+  if (thr <= mil) {
+    const u = thr / mil;
+    T = e.dry * (0.04 + 0.96 * u ** 1.6);
+    sfc = sd * (1 + 0.25 * (1 - u));
+    state = u < 0.02 ? 'Idle' : u > 0.985 ? 'Military power' : 'Dry ' + Math.round(u * 100) + '%';
+  } else {
+    const u = (thr - mil) / (1 - mil);
+    T = e.dry + (e.wet - e.dry) * (0.35 + 0.65 * u);
+    sfc = lerp(sw * 0.85, sw, u);
+    zone = Math.max(1, Math.ceil(u * (e.zones || 5)));
+    state = u > 0.985 ? 'Maximum afterburner' : 'Afterburner zone ' + zone;
+  }
+  const lm = loadoutMass(ac, load || {});
+  const fuelInt = ac.wt.fuel * fuelFrac, fuel = fuelInt + lm.fuel * fuelFrac;
+  const crew = (ac.crew || 1) * 100;
+  const gross = ac.wt.empty + crew + fuelInt + lm.kg + lm.fuel * fuelFrac;
+  const Ttot = T * e.n;                         // kN
+  const flow = Ttot * sfc * 101.97 / 3600;       // kg/s, from lb/(lbf h)
+  let power = null;
+  if (e.type === 'turboprop') power = e.kw * e.n * (0.04 + 0.96 * (thr) ** 1.6);
+  return {
+    T, Ttot, sfc, flow, state, zone, ab, afterburner: thr > mil,
+    gross, fuel, stores: lm.kg, extFuel: lm.fuel * fuelFrac, crew, overload: gross > ac.wt.mtow,
+    tw: Ttot * 1000 / (gross * 9.80665), twMax: (e.wet || e.dry) * e.n * 1000 / (gross * 9.80665),
+    wl: gross / ac.dims.wingArea, endurance: fuel / Math.max(flow, 1e-6) / 60, power,
+  };
+}
+
+// ---- 35-aircraft.js
+// The aircraft. Geometry is authored in s = metres aft of the nose, y up, z starboard.
+// Shapes are simplified from published three-view dimensions; specs are public figures for the
+// variant named, and any field listed in `est` is an open-source estimate.
+const AIRCRAFT = [];
+const tan = d => Math.tan(d * D2R);
+
+// Parts
+const fus = (st, o = {}) => ({ t: 'loft', st, fine: 0.5, ...o });
+const pod = (st, z, o = {}) => ({ t: 'loft', st, z, mirror: true, ...o });
+const canopy = (st, o = {}) => ({ t: 'loft', st, mat: 'glass', ...o });
+const wing = (name, sec, o = {}) => ({ t: 'panel', name, sec, mirror: true, ...o });
+const surf = (sec, o = {}) => ({ t: 'panel', sec, mirror: true, ...o });
+const noz = (o) => ({ t: 'noz', ...o });
+
+// Trapezoidal panel from root LE (s, y, z), root chord, tip z, LE sweep, tip chord, dihedral.
+const trap = (s, y, z, cr, zt, sweep, ct, dih = 0, t = 0.05, t2 = t) =>
+  [[s, y, z, cr, t], [s + tan(sweep) * (zt - z), y + tan(dih) * (zt - z), zt, ct, t2]];
+// Fin from root LE, height along the fin, LE sweep, tip chord, cant from vertical (outward).
+const vfin = (s, y, z, cr, h, sweep, ct, cant = 0, t = 0.05) =>
+  [[s, y, z, cr, t], [s + tan(sweep) * h, y + h * Math.cos(cant * D2R), z + h * Math.sin(cant * D2R), ct, t]];
+// Circular cross-section helper for lofts: [s, r, yc]
+const ring = (s, r, y = 0) => [s, r, r, r, y, 2];
+
+const A = o => AIRCRAFT.push(o);
+
+// =====================================================================================
+A({
+  key: 'f16', name: 'F-16C Fighting Falcon', short: 'F-16C', variant: 'Block 50', nick: 'Viper',
+  role: 'Multirole fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'General Dynamics / Lockheed Martin',
+  first: 1974, intro: 1978, built: '4,600+', status: 'In service with 25 air forces', crew: 1,
+  paint: '#8e979e', paint2: '#737d86',
+  dims: { len: 15.06, span: 9.96, height: 4.88, wingArea: 27.87 },
+  wt: { empty: 8570, mtow: 19187, fuel: 3200 },
+  eng: { n: 1, name: 'General Electric F110-GE-129', type: 'Afterburning turbofan', dry: 76.3, wet: 131.6, zones: 5, bypass: 0.76 },
+  perf: { mach: 2.05, vmax: 2120, ceil: 15240, radius: 550, ferry: 4220, g: '+9 / -3', roc: 254 },
+  gun: 'M61A1 Vulcan 20 mm, 511 rounds', hard: '9 (2 wingtip, 6 underwing, 1 centreline) plus 2 chin pod mounts', payload: 7700,
+  fact: 'The first fighter built around fly-by-wire and a reclined seat that helps the pilot take 9 g. Its single engine breathes through the chin intake under the cockpit.',
+  geo: [
+    fus([ring(0, 0.02), ring(0.8, 0.28), [2.0, 0.5, 0.48, 0.45, 0.02, 2], [3.3, 0.62, 0.6, 0.55, 0.05, 2.2], [5.0, 0.72, 0.65, 0.75, 0, 2.3], [6.5, 0.9, 0.7, 0.9, 0, 2.4], [8.5, 0.95, 0.65, 0.9, 0, 2.4], [11, 0.85, 0.6, 0.8, 0, 2.3], [13.2, 0.7, 0.55, 0.65, 0, 2], [14.2, 0.6, 0.5, 0.55, 0, 2]], { capF: 'dark' }),
+    fus([[4.6, 0.55, 0.32, 0.4, -0.98, 2.6], [6.0, 0.56, 0.4, 0.42, -0.9, 2.6], [8.0, 0.5, 0.35, 0.3, -0.62, 2.2], [9.0, 0.3, 0.2, 0.1, -0.45, 2]], { capF: 'hole', fine: 0 }),
+    canopy([[2.6, 0.05, 0.02, 0.02, 0.5], [3.4, 0.36, 0.34, 0.05, 0.58], [4.6, 0.42, 0.42, 0.05, 0.63], [6.0, 0.35, 0.3, 0.05, 0.6], [7.0, 0.08, 0.05, 0.02, 0.58]]),
+    fus([[6.2, 0.35, 0.25, 0.1, 0.55, 2], [9, 0.45, 0.22, 0.1, 0.55, 2.4], [12.5, 0.3, 0.12, 0.1, 0.5, 2], [13.6, 0.1, 0.05, 0.05, 0.45, 2]], { fine: 0 }),
+    wing('wing', [[4.6, -0.1, 0.72, 7.5, 0.025], [7.2, -0.1, 1.45, 5.0, 0.04], [7.2 + tan(40) * 3.27, -0.1, 4.72, 1.5, 0.04]]),
+    surf(trap(12.3, -0.1, 0.65, 2.6, 2.79, 40, 0.9, -10, 0.05)),
+    { t: 'panel', sec: vfin(10.4, 0.5, 0, 3.4, 2.6, 47, 1.2, 0, 0.05) },
+    surf(vfin(11.8, -0.7, 0.55, 1.4, 0.55, 45, 0.7, 150, 0.05)),
+    noz({ s: 15.06, r: 0.52, len: 1.1 }),
+  ],
+  stations: [
+    { id: '1/9', label: 'Wingtip', on: 'wing', f: 1, c: 0.45, kind: 'rail', mirror: true, max: 193 },
+    { id: '2/8', label: 'Outboard', on: 'wing', f: 0.8, c: 0.38, mirror: true, max: 204, fixed: true, drop: 0.25 },
+    { id: '3/7', label: 'Midboard', on: 'wing', f: 0.58, c: 0.38, mirror: true, max: 1587, fixed: true },
+    { id: '4/6', label: 'Inboard (wet)', on: 'wing', f: 0.37, c: 0.38, mirror: true, max: 2041, fixed: true },
+    { id: '5', label: 'Centreline (wet)', at: [8.4, -0.92, 0], max: 1000, drop: 0.25 },
+    { id: '5L', label: 'Left chin', at: [6.5, -0.98, -0.55], max: 250, drop: 0.12 },
+    { id: '5R', label: 'Right chin', at: [6.5, -0.98, 0.55], max: 250, drop: 0.12 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Four AMRAAMs, two Sidewinders, two wing tanks.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'AIM-120C', '4/6': 'Tank 370' } },
+    { name: 'Precision strike', note: 'Two 2,000 lb JDAMs with targeting and jamming pods.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'GBU-31', '4/6': 'Tank 370', '5': 'ALQ-184', '5R': 'Sniper' } },
+    { name: 'SEAD (Wild Weasel)', note: 'Block 50 speciality: HARMs cued by the HARM Targeting System.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': 'AGM-88', '4/6': 'Tank 370', '5': 'ALQ-184', '5L': 'HTS' } },
+    { name: 'Close air support', note: 'Six Mk 82s on triple ejector racks and laser-guided bombs.', set: { '1/9': 'AIM-120C', '2/8': 'AIM-9X', '3/7': ['Mk 82', 3], '4/6': 'GBU-12', '5': 'Tank 300', '5R': 'Sniper' } },
+    { name: 'Clean', note: 'Tip missiles only.', set: { '1/9': 'AIM-9X' } },
+  ],
+});
+
+// =====================================================================================
+A({
+  key: 'f22', name: 'F-22A Raptor', short: 'F-22A', nick: 'Raptor', variant: 'Block 30/35',
+  role: 'Stealth air superiority fighter', cat: 'Fighter', gen: 5, country: 'United States', maker: 'Lockheed Martin / Boeing',
+  first: 1997, intro: 2005, built: '195 (8 test, 187 production)', status: 'In service, US Air Force only', crew: 1,
+  paint: '#8b939a', paint2: '#737c84',
+  dims: { len: 18.92, span: 13.56, height: 5.08, wingArea: 78.04 },
+  wt: { empty: 19700, mtow: 38000, fuel: 8200 },
+  eng: { n: 2, name: 'Pratt & Whitney F119-PW-100', type: 'Afterburning turbofan', dry: 116, wet: 156, bypass: 0.3, tv: '2D nozzles, pitch ±20°' },
+  perf: { mach: 2.25, vmax: 2414, cruise: 'Supercruise Mach 1.82 without afterburner', ceil: 19812, radius: 852, ferry: 2960, g: '+9 / -3' },
+  gun: 'M61A2 Vulcan 20 mm, 480 rounds', hard: '3 internal bays (main, two side), 4 underwing', payload: 9100,
+  fact: 'The first fighter to combine stealth, supercruise and thrust vectoring. Its weapons ride in three internal bays, and the AMRAAMs are pushed clear of the airflow on hydraulic launchers before they fire.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, -0.1, 2], [1.0, 0.36, 0.3, 0.26, -0.06, 1.6], [2.4, 0.62, 0.48, 0.42, 0, 1.6], [3.8, 0.8, 0.6, 0.52, 0.04, 1.6], [5.6, 1.15, 0.68, 0.58, 0.04, 1.7], [7.4, 1.95, 0.7, 0.6, 0, 1.8], [10.5, 2.25, 0.72, 0.6, 0, 1.9], [13.5, 2.05, 0.62, 0.52, 0, 1.9], [16.2, 1.6, 0.46, 0.42, 0, 2.1], [18.0, 1.3, 0.36, 0.32, 0, 2.4]], { capF: 'dark' }),
+    pod([[5.3, 0.5, 0.55, 0.55, -0.15, 1.5], [6.8, 0.6, 0.6, 0.58, -0.1, 1.7], [8.6, 0.5, 0.5, 0.5, -0.05, 2]], 1.55, { capF: 'hole' }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.5], [3.6, 0.4, 0.42, 0.05, 0.56], [5.0, 0.45, 0.5, 0.05, 0.6], [6.6, 0.32, 0.34, 0.05, 0.62], [7.8, 0.06, 0.06, 0.02, 0.62]], { mat: 'gold' }),
+    wing('wing', trap(7.8, -0.05, 1.9, 8.4, 6.78, 42, 1.9, -3.25, 0.045)),
+    surf(trap(15.3, -0.15, 1.7, 3.4, 4.45, 42, 1.3, 0, 0.04)),
+    surf(vfin(13.0, 0.55, 1.45, 3.9, 2.9, 23, 1.4, 28, 0.045)),
+    noz({ shape: '2d', s: 18.92, z: 0.62, w: 0.52, h: 0.34, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'MB-o', label: 'Main bay, outer', at: [9.4, -0.1, 0.62], kind: 'bay', mirror: true, bay: { len: 4.6, w: 0.8, h: 0.55 } },
+    { id: 'MB-i', label: 'Main bay, inner', at: [9.4, -0.1, 0.2], kind: 'bay', mirror: true, bay: { len: 4.4, w: 0.4, h: 0.45, doors: false } },
+    { id: 'SB', label: 'Side bay', at: [8.0, -0.1, 1.62], kind: 'bay', mirror: true, bay: { len: 3.3, w: 0.42, h: 0.45 } },
+    { id: 'W1', label: 'Inboard wing', on: 'wing', f: 0.3, c: 0.4, mirror: true, max: 2270 },
+    { id: 'W2', label: 'Outboard wing', on: 'wing', f: 0.58, c: 0.4, mirror: true, max: 2270 },
+  ],
+  loadouts: [
+    { name: 'Air dominance', note: 'Six AMRAAMs in the main bay, a Sidewinder in each side bay. Clean and stealthy.', set: { 'MB-o': ['AIM-120C', 2], 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Strike (JDAM)', note: 'Two 1,000 lb JDAMs plus two AMRAAMs and two Sidewinders.', set: { 'MB-o': 'GBU-32', 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Strike (SDB)', note: 'Eight Small Diameter Bombs on two BRU-61 racks.', set: { 'MB-o': 'Rack SDB', 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+    { name: 'Ferry', note: 'Four 600 gal tanks on the wing pylons for deployments. Not stealthy.', set: { W1: 'Tank 600', W2: 'Tank 600', 'MB-o': ['AIM-120C', 2], 'MB-i': 'AIM-120C', SB: 'AIM-9X' } },
+  ],
+});
+
+A({
+  key: 'f35a', name: 'F-35A Lightning II', short: 'F-35A', nick: 'Lightning II', variant: 'Block 3F / 4',
+  role: 'Stealth multirole fighter', cat: 'Fighter', gen: 5, country: 'United States', maker: 'Lockheed Martin',
+  first: 2006, intro: 2016, built: '1,100+ (all variants)', status: 'In production, 19 nations', crew: 1,
+  paint: '#7f878d', paint2: '#6b7379',
+  dims: { len: 15.7, span: 10.7, height: 4.38, wingArea: 42.7 },
+  wt: { empty: 13290, mtow: 31800, fuel: 8278 },
+  eng: { n: 1, name: 'Pratt & Whitney F135-PW-100', type: 'Afterburning turbofan', dry: 125, wet: 191, bypass: 0.57 },
+  perf: { mach: 1.6, vmax: 1930, ceil: 15240, radius: 1093, ferry: 2800, g: '+9 / -3' },
+  gun: 'GAU-22/A 25 mm, 180 rounds (internal)', hard: '4 internal bay stations, 6 underwing', payload: 8160,
+  fact: 'The F135 is the most powerful engine ever fitted to a fighter. Two internal bays each hold one air-to-ground weapon up to 2,000 lb and one AMRAAM on the door.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, -0.05, 2], [1.0, 0.38, 0.32, 0.3, 0, 1.7], [2.4, 0.66, 0.52, 0.5, 0.05, 1.7], [4.0, 0.95, 0.7, 0.6, 0.08, 1.8], [6.0, 1.65, 0.8, 0.72, 0.02, 1.9], [9.0, 1.85, 0.8, 0.72, 0, 2], [11.5, 1.6, 0.75, 0.65, 0, 2.1], [13.6, 1.05, 0.62, 0.55, 0, 2.2], [14.6, 0.75, 0.58, 0.55, 0, 2]], { capF: 'dark' }),
+    pod([[4.4, 0.42, 0.48, 0.45, 0.05, 1.6], [5.6, 0.5, 0.55, 0.5, 0.02, 1.8], [7.4, 0.4, 0.45, 0.4, 0, 2]], 1.2, { capF: 'hole' }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.38, 0.42, 0.05, 0.62], [4.6, 0.45, 0.5, 0.05, 0.7], [6.2, 0.3, 0.3, 0.05, 0.72], [7.2, 0.05, 0.05, 0.02, 0.7]], { mat: 'gold' }),
+    wing('wing', trap(6.6, -0.05, 1.6, 6.2, 5.35, 34, 2.2, -2, 0.05)),
+    surf(trap(12.6, -0.05, 1.2, 3.0, 3.45, 34, 1.1, 0, 0.04)),
+    surf(vfin(10.4, 0.6, 1.05, 3.0, 2.3, 35, 1.2, 22, 0.045)),
+    noz({ s: 15.7, r: 0.56, len: 1.4 }),
+  ],
+  stations: [
+    { id: 'Bay A/G', label: 'Bay, air-to-ground', at: [8.3, -0.15, 0.62], kind: 'bay', mirror: true, max: 1000, bay: { len: 4.3, w: 0.8, h: 0.6 } },
+    { id: 'Bay A/A', label: 'Bay door, air-to-air', at: [8.3, -0.15, 0.18], kind: 'bay', mirror: true, max: 160, bay: { len: 4.0, w: 0.36, h: 0.45, doors: false } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.22, c: 0.4, mirror: true, max: 2270 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.5, c: 0.4, mirror: true, max: 1100 },
+    { id: 'W3', label: 'Outboard', on: 'wing', f: 0.85, c: 0.4, mirror: true, max: 150, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Stealth strike', note: 'Two 2,000 lb JDAMs and two AMRAAMs, all internal.', set: { 'Bay A/G': 'GBU-31', 'Bay A/A': 'AIM-120C' } },
+    { name: 'Stealth air-to-air', note: 'Four AMRAAMs internal.', set: { 'Bay A/G': 'AIM-120D', 'Bay A/A': 'AIM-120D' } },
+    { name: 'Small Diameter Bombs', note: 'Eight SDBs on BRU-61 racks and two AMRAAMs.', set: { 'Bay A/G': 'Rack SDB', 'Bay A/A': 'AIM-120C' } },
+    { name: 'Beast mode', note: 'Stealth traded for payload: six 2,000 lb JDAMs, two AMRAAMs, two Sidewinders.', set: { 'Bay A/G': 'GBU-31', 'Bay A/A': 'AIM-120C', W1: 'GBU-31', W2: 'GBU-31', W3: 'AIM-9X' } },
+    { name: 'Nuclear', note: 'Two B61-12 in the bays. The F-35A was certified for it in 2024.', set: { 'Bay A/G': 'B61', 'Bay A/A': 'AIM-120C' } },
+  ],
+});
+
+A({
+  key: 'f15e', name: 'F-15E Strike Eagle', short: 'F-15E', nick: 'Mudhen', variant: '',
+  role: 'Dual-role strike fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'McDonnell Douglas / Boeing',
+  first: 1986, intro: 1989, built: '420+ (incl. export)', status: 'In service', crew: 2,
+  paint: '#6f767b', paint2: '#5d6468',
+  dims: { len: 19.43, span: 13.05, height: 5.63, wingArea: 56.5 },
+  wt: { empty: 14300, mtow: 36700, fuel: 5952 },
+  eng: { n: 2, name: 'Pratt & Whitney F100-PW-229', type: 'Afterburning turbofan', dry: 79.2, wet: 129.4, zones: 5, bypass: 0.36 },
+  perf: { mach: 2.5, vmax: 2655, ceil: 18200, radius: 1270, ferry: 3900, g: '+9 / -3' },
+  gun: 'M61A1 Vulcan 20 mm, 510 rounds', hard: '2 wing pylons (with 4 missile rails), 12 conformal tank stations, centreline, 2 pod mounts', payload: 10400,
+  fact: 'A two-seat strike version of the air superiority Eagle. Conformal fuel tanks hug the intakes and carry bombs in rows, so the wing pylons stay free for fuel and missiles.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.42, 0.42, 0, 2], [2.8, 0.62, 0.62, 0.6, 0.05, 2], [4.5, 0.72, 0.72, 0.62, 0.12, 2.2], [6.5, 0.8, 0.75, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.55, 0.5, 0, 3], [15.5, 1.35, 0.5, 0.5, 0, 3], [17.8, 1.25, 0.45, 0.45, 0, 3]], { capF: 'dark' }),
+    pod([[5.6, 0.55, 0.62, 0.62, -0.2, 4], [7, 0.58, 0.62, 0.62, -0.15, 4], [10, 0.55, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.45, { capF: 'hole' }),
+    pod([[7.5, 0.1, 0.1, 0.1, -0.5, 2], [8.5, 0.42, 0.42, 0.42, -0.5, 2.5], [13, 0.42, 0.42, 0.42, -0.45, 2.5], [14.5, 0.08, 0.1, 0.1, -0.4, 2]], 1.75),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.42, 0.42, 0.05, 0.8], [5.5, 0.48, 0.52, 0.05, 0.86], [7.2, 0.46, 0.5, 0.05, 0.86], [8.6, 0.3, 0.25, 0.05, 0.82], [9.6, 0.08, 0.05, 0.02, 0.76]]),
+    wing('wing', trap(8.8, 0.3, 1.9, 6.4, 6.52, 45, 2.0, -1, 0.05)),
+    surf(trap(15.8, 0.1, 1.9, 3.2, 4.3, 50, 1.3, 0, 0.04)),
+    surf(vfin(14.3, 0.5, 1.25, 3.4, 3.0, 36, 1.2, 2, 0.045)),
+    noz({ s: 19.43, z: 0.62, r: 0.52, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: 'W2/8', label: 'Wing pylon + rails', on: 'wing', f: 0.36, c: 0.38, mirror: true, max: 2270, fixed: true, drop: 0.45 },
+    { id: 'CFT-o', label: 'Conformal, outer row', at: [11.3, -0.95, 2.02], kind: 'conf', mirror: true },
+    { id: 'CFT-i', label: 'Conformal, inner row', at: [11.3, -0.95, 1.48], kind: 'conf', mirror: true },
+    { id: 'CL', label: 'Centreline', at: [11.5, -0.62, 0], max: 2270, drop: 0.3 },
+    { id: 'LP', label: 'Left intake pod', at: [7.0, -0.85, 1.45], side: -1, drop: 0.12 },
+    { id: 'RP', label: 'Right intake pod', at: [7.0, -0.85, 1.45], drop: 0.12 },
+  ],
+  loadouts: [
+    { name: 'Heavy strike', note: 'Four 2,000 lb JDAMs on the conformal tanks, four AMRAAMs, targeting and navigation pods.', set: { 'CFT-o': 'GBU-31', 'CFT-i': 'GBU-31', 'W2/8': ['AIM-120C', 2], CL: 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Twelve Mk 82', note: 'Classic interdiction load, six bombs on each conformal tank.', set: { 'CFT-o': ['Mk 82', 3], 'CFT-i': ['Mk 82', 3], 'W2/8': 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Small Diameter Bombs', note: 'Twenty-four SDBs on six BRU-61 racks.', set: { 'CFT-o': ['Rack SDB', 2], 'CFT-i': 'Rack SDB', 'W2/8': ['AIM-120C', 2], CL: 'Tank 610', LP: 'Sniper', RP: 'LANTIRN' } },
+    { name: 'Air-to-air', note: 'Four AMRAAMs and two Sidewinders on the wing rails.', set: { 'W2/8': ['AIM-120C', 2], 'CFT-o': 'AIM-9X', CL: 'Tank 610' } },
+    { name: 'Ferry', note: 'Three 610 gal tanks: 5,500 kg of extra fuel.', set: { 'W2/8': 'Tank 610', CL: 'Tank 610' } },
+  ],
+});
+
+A({
+  key: 'fa18e', name: 'F/A-18E Super Hornet', short: 'F/A-18E', nick: 'Rhino', variant: 'Block III',
+  role: 'Carrier-based multirole fighter', cat: 'Fighter', gen: 4.5, country: 'United States', maker: 'Boeing',
+  first: 1995, intro: 2001, built: '630+ (E/F/G)', status: 'In service', crew: 1,
+  paint: '#8b9399', paint2: '#788086',
+  dims: { len: 18.31, span: 13.62, height: 4.88, wingArea: 46.45 },
+  wt: { empty: 14552, mtow: 29937, fuel: 6531 },
+  eng: { n: 2, name: 'General Electric F414-GE-400', type: 'Afterburning turbofan', dry: 62.3, wet: 97.9, bypass: 0.25 },
+  perf: { mach: 1.8, vmax: 1915, ceil: 15000, radius: 722, ferry: 3330, g: '+7.6 / -3' },
+  gun: 'M61A2 Vulcan 20 mm, 412 rounds', hard: '11 (2 wingtip, 6 underwing, 2 fuselage, 1 centreline)', payload: 8050,
+  fact: 'Bigger than the original Hornet in almost every dimension, with caret intakes and outward-angled pylons that stop released stores from striking the aircraft.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.45, 0.45, 0.42, 0, 2], [3.0, 0.68, 0.66, 0.6, 0.08, 2.2], [5.0, 0.8, 0.72, 0.6, 0.15, 2.3], [7.5, 1.25, 0.7, 0.6, 0.05, 2.6], [11, 1.4, 0.62, 0.6, 0, 2.8], [14.5, 1.25, 0.55, 0.55, 0, 2.8], [16.8, 1.05, 0.45, 0.45, 0, 2.6], [17.6, 0.9, 0.42, 0.42, 0, 2.4]], { capF: 'dark' }),
+    pod([[7.0, 0.45, 0.42, 0.5, -0.5, 1.8], [8.5, 0.5, 0.45, 0.5, -0.42, 2.5], [11, 0.4, 0.4, 0.4, -0.3, 2]], 1.3, { capF: 'hole' }),
+    canopy([[3.2, 0.05, 0.02, 0.02, 0.72], [4.0, 0.4, 0.4, 0.05, 0.8], [5.6, 0.45, 0.5, 0.05, 0.86], [7.2, 0.32, 0.3, 0.05, 0.84], [8.6, 0.06, 0.05, 0.02, 0.76]]),
+    wing('wing', [[4.2, 0.25, 0.7, 9.0, 0.02], [8.4, 0.15, 2.2, 5.0, 0.045], [10.55, 0.1, 6.25, 1.7, 0.04]]),
+    surf(trap(15.2, 0.0, 1.2, 3.1, 3.45, 40, 1.3, -2, 0.04)),
+    surf(vfin(12.2, 0.55, 1.0, 3.3, 2.8, 40, 1.4, 20, 0.045)),
+    noz({ s: 18.31, z: 0.55, r: 0.5, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: '1/11', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 227 },
+    { id: '2/10', label: 'Outboard', on: 'wing', f: 0.78, c: 0.4, mirror: true, max: 520, fixed: true },
+    { id: '3/9', label: 'Midboard', on: 'wing', f: 0.56, c: 0.4, mirror: true, max: 1150, fixed: true },
+    { id: '4/8', label: 'Inboard (wet)', on: 'wing', f: 0.34, c: 0.4, mirror: true, max: 1590, fixed: true },
+    { id: '5/7', label: 'Fuselage', at: [11.0, -0.85, 0.9], kind: 'conf', mirror: true, max: 350 },
+    { id: '6', label: 'Centreline (wet)', at: [11.2, -0.62, 0], max: 1100, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Strike', note: 'Two 2,000 lb JDAMs, targeting pod on the left fuselage station.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120C', '3/9': 'GBU-31', '4/8': 'Tank 480', '5/7': 'AIM-120C', '6': 'ATFLIR' } },
+    { name: 'Fleet air defence', note: 'Eight AMRAAMs and two Sidewinders.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120D', '3/9': 'AIM-120D', '4/8': 'AIM-120D', '5/7': 'AIM-120D', '6': 'Tank 480' } },
+    { name: 'Anti-ship', note: 'Two Harpoons with three tanks.', set: { '1/11': 'AIM-9X', '2/10': 'AIM-120C', '3/9': 'AGM-84', '4/8': 'Tank 480', '6': 'Tank 480' } },
+    { name: 'SEAD', note: 'Four HARMs.', set: { '1/11': 'AIM-9X', '2/10': 'AGM-88', '3/9': 'AGM-88', '4/8': 'Tank 480', '5/7': 'AIM-120C' } },
+    { name: 'Tanker (5 tanks)', note: 'Buddy refuelling: four wing tanks and the centreline store.', set: { '1/11': 'AIM-9X', '3/9': 'Tank 480', '4/8': 'Tank 480', '6': 'Tank 480' } },
+  ],
+});
+
+A({
+  key: 'f14d', name: 'F-14D Super Tomcat', short: 'F-14D', nick: 'Tomcat', variant: '',
+  role: 'Carrier-based fleet defence fighter', cat: 'Fighter', gen: 4, country: 'United States', maker: 'Grumman',
+  first: 1970, intro: 1974, built: '712 (all variants)', status: 'Retired by US Navy 2006; F-14A still flown by Iran', crew: 2,
+  paint: '#9aa1a6', paint2: '#838a90',
+  dims: { len: 19.1, span: 19.55, spanSwept: 11.58, height: 4.88, wingArea: 54.5 },
+  wt: { empty: 19838, mtow: 33720, fuel: 7348 },
+  eng: { n: 2, name: 'General Electric F110-GE-400', type: 'Afterburning turbofan', dry: 61.4, wet: 124.7, bypass: 0.87 },
+  sweep: { def: 20, min: 20, max: 68 },
+  perf: { mach: 2.34, vmax: 2485, ceil: 16150, radius: 926, ferry: 2960, g: '+7.5 / -3' },
+  gun: 'M61A1 Vulcan 20 mm, 675 rounds', hard: '10 (4 tunnel, 2 glove, 2 glove rails, 2 nacelle)', payload: 6600,
+  fact: 'The wings sweep automatically from 20° to 68° with speed. Its AWG-9 radar and Phoenix missiles were built to stop Soviet bomber raids on the carrier from more than 150 km away.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.5, 0.45, 0, 2], [3.2, 0.72, 0.7, 0.62, 0.1, 2.2], [5.0, 0.82, 0.78, 0.62, 0.18, 2.3], [7.0, 0.95, 0.78, 0.6, 0.12, 2.5], [9.5, 1.1, 0.55, 0.45, 0.05, 3], [13, 1.0, 0.35, 0.35, 0.05, 3], [16.5, 0.75, 0.25, 0.25, 0.05, 3], [18.4, 0.4, 0.15, 0.15, 0.05, 2]], { capF: 'dark' }),
+    fus([[7.5, 1.2, 0.3, 0.3, 0.05, 4], [10, 2.3, 0.3, 0.3, 0, 4], [14, 2.3, 0.3, 0.3, 0, 4], [17, 1.9, 0.25, 0.25, 0, 4], [17.8, 1.5, 0.2, 0.2, 0, 3]]),
+    pod([[7.2, 0.55, 0.62, 0.62, -0.3, 4], [9, 0.6, 0.65, 0.65, -0.3, 3.5], [13, 0.62, 0.6, 0.6, -0.2, 2.5], [16.8, 0.55, 0.55, 0.55, -0.15, 2], [17.9, 0.5, 0.5, 0.5, -0.1, 2]], 1.45, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.45, 0.05, 0.86], [6.0, 0.5, 0.55, 0.05, 0.92], [7.8, 0.45, 0.48, 0.05, 0.92], [9.2, 0.25, 0.2, 0.05, 0.86], [10.2, 0.05, 0.05, 0.02, 0.8]]),
+    surf([[6.5, 0.1, 1.2, 6.0, 0.03], [9.8, 0.1, 2.7, 3.6, 0.04]]),
+    wing('wing', [[9.9, 0.1, 2.7, 3.7, 0.05], [12.47, 0.1, 9.77, 1.4, 0.05]], { pivot: [11.4, 2.7], sweep: { def: 20 } }),
+    surf(trap(16.0, -0.05, 1.9, 3.2, 4.98, 50, 1.1, -2, 0.04)),
+    surf(vfin(13.3, 0.55, 1.45, 3.6, 2.9, 43, 1.3, 5, 0.045)),
+    noz({ s: 19.0, z: 1.45, y: -0.12, r: 0.55, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: '1B/8B', label: 'Glove pylon', at: [9.2, -0.35, 2.3], mirror: true, max: 1000, drop: 0.35 },
+    { id: '1A/8A', label: 'Glove shoulder rail', at: [8.8, -0.25, 2.75], kind: 'rail', mirror: true, max: 90 },
+    { id: '3/6', label: 'Tunnel, forward', at: [10.4, -0.32, 0.55], kind: 'semi', mirror: true, max: 1000 },
+    { id: '4/5', label: 'Tunnel, aft', at: [14.2, -0.32, 0.55], kind: 'semi', mirror: true, max: 1000 },
+    { id: '2/7', label: 'Nacelle (tank)', at: [11.6, -0.95, 1.45], mirror: true, max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Six Phoenix', note: 'The famous fleet-defence load. Too heavy to land back on the carrier with all six.', set: { '1B/8B': 'AIM-54C', '3/6': 'AIM-54C', '4/5': 'AIM-54C', '2/7': 'Tank 300' } },
+    { name: 'Combat air patrol', note: 'Mixed long, medium and short range missiles.', set: { '1B/8B': 'AIM-54C', '1A/8A': 'AIM-9M', '3/6': 'AIM-7M', '4/5': 'AIM-54C', '2/7': 'Tank 300' } },
+    { name: 'Bombcat', note: 'Late-career strike role with laser-guided bombs.', set: { '1B/8B': 'AIM-7M', '1A/8A': 'AIM-9M', '3/6': 'GBU-12', '4/5': 'GBU-12', '2/7': 'Tank 300' } },
+    { name: 'Clean', note: 'Tanks only.', set: { '2/7': 'Tank 300' } },
+  ],
+});
+
+A({
+  key: 'f4e', name: 'F-4E Phantom II', short: 'F-4E', nick: 'Phantom', variant: '',
+  role: 'Fighter-bomber', cat: 'Fighter', gen: 3, country: 'United States', maker: 'McDonnell Douglas',
+  first: 1958, intro: 1967, built: '5,195 (all variants)', status: 'Retired by the US; still flown by a few air forces', crew: 2,
+  paint: '#7d8468', paint2: '#5f6650',
+  dims: { len: 19.2, span: 11.7, height: 5.0, wingArea: 49.2 },
+  wt: { empty: 13757, mtow: 28030, fuel: 5600 },
+  eng: { n: 2, name: 'General Electric J79-GE-17A', type: 'Afterburning turbojet', dry: 52.8, wet: 79.6, bypass: 0, sfc: [0.84, 1.97] },
+  perf: { mach: 2.23, vmax: 2370, ceil: 18300, radius: 680, ferry: 2600, g: '+7.3' },
+  gun: 'M61A1 Vulcan 20 mm, 640 rounds (under the nose)', hard: '9 (4 semi-recessed, 4 wing, 1 centreline)', payload: 8480,
+  fact: 'Built as a Navy interceptor, it became the West\'s standard fighter-bomber of the 1960s and 70s. The E added the internal gun that Vietnam showed was missing. Note the upturned outer wings and drooping tail.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.42, 0.42, 0.42, 0, 2], [3.2, 0.62, 0.62, 0.6, 0.05, 2.1], [5.0, 0.72, 0.72, 0.6, 0.1, 2.2], [7.0, 0.8, 0.75, 0.6, 0.08, 2.3], [10, 1.25, 0.7, 0.62, 0, 2.6], [13.5, 1.2, 0.62, 0.55, 0, 2.5], [16, 0.8, 0.55, 0.45, 0.1, 2.2], [18.4, 0.35, 0.4, 0.25, 0.25, 2], [19.2, 0.1, 0.15, 0.1, 0.3, 2]], { capF: 'dark' }),
+    pod([[5.6, 0.35, 0.6, 0.6, 0, 3], [7.5, 0.45, 0.62, 0.62, -0.05, 3], [11, 0.45, 0.55, 0.55, -0.05, 2.5]], 1.1, { capF: 'hole' }),
+    canopy([[3.6, 0.05, 0.02, 0.02, 0.62], [4.4, 0.42, 0.42, 0.05, 0.7], [6, 0.48, 0.5, 0.05, 0.76], [8.4, 0.46, 0.46, 0.05, 0.76], [10.2, 0.3, 0.25, 0.05, 0.7], [11, 0.06, 0.05, 0.02, 0.66]]),
+    wing('wing', trap(8.8, -0.25, 1.1, 6.6, 3.9, 45, 4.3, 0, 0.05)),
+    surf([[11.3, -0.25, 3.9, 4.5, 0.045], [13.25, 0.16, 5.85, 1.6, 0.04]]),
+    surf(trap(16.8, 0.35, 0.3, 2.8, 2.7, 45, 1.0, -23, 0.04)),
+    { t: 'panel', sec: vfin(14.6, 0.5, 0, 3.7, 2.45, 55, 1.0, 0, 0.045) },
+    noz({ s: 17.9, z: 0.55, y: -0.2, r: 0.45, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: '1/9', label: 'Outboard wing', on: 'wing', f: 0.85, c: 0.35, mirror: true, max: 1370, fixed: true },
+    { id: '2/8', label: 'Inboard wing', on: 'wing', f: 0.35, c: 0.35, mirror: true, max: 1370, fixed: true },
+    { id: '3/7', label: 'Sparrow well, forward', at: [9.4, -0.62, 0.72], kind: 'semi', mirror: true, max: 231 },
+    { id: '4/6', label: 'Sparrow well, aft', at: [13.6, -0.58, 0.68], kind: 'semi', mirror: true, max: 231 },
+    { id: '5', label: 'Centreline', at: [11.4, -0.72, 0], max: 2270, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'MiGCAP', note: 'Four Sparrows, four Sidewinders, three tanks.', set: { '3/7': 'AIM-7M', '4/6': 'AIM-7M', '2/8': ['AIM-9M', 2], '1/9': 'Tank 370', '5': 'Tank 600' } },
+    { name: 'Iron bombs', note: 'Twelve Mk 82s on triple ejector racks, Sparrows for self defence.', set: { '1/9': ['Mk 82', 3], '2/8': ['Mk 82', 3], '4/6': 'AIM-7M', '5': 'Tank 600' } },
+    { name: 'Laser-guided', note: 'Two 2,000 lb Paveways with a jamming pod.', set: { '2/8': 'GBU-10', '1/9': 'Tank 370', '3/7': 'ALQ-184', '4/6': 'AIM-7M' } },
+    { name: 'Clean', note: '', set: {} },
+  ],
+});
+
+A({
+  key: 'su35', name: 'Su-35S Flanker-E', short: 'Su-35S', nick: 'Flanker-E', variant: '',
+  role: 'Air superiority and multirole fighter', cat: 'Fighter', gen: 4.5, country: 'Russia', maker: 'Sukhoi (United Aircraft Corporation)',
+  first: 2008, intro: 2014, built: '150+', status: 'In production', crew: 1,
+  paint: '#8c9aa6', paint2: '#5f6f7c',
+  dims: { len: 21.9, span: 15.3, height: 5.9, wingArea: 62 },
+  wt: { empty: 18400, mtow: 34500, fuel: 11500 },
+  eng: { n: 2, name: 'Saturn AL-41F1S (izdeliye 117S)', type: 'Afterburning turbofan', dry: 86.3, wet: 142.2, bypass: 0.59, tv: '3D, ±15° on canted axes' },
+  perf: { mach: 2.25, vmax: 2400, ceil: 18000, radius: 1580, ferry: 4500, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '12 (2 wingtip, 6 underwing, 2 tunnel, 2 nacelle)', payload: 8000,
+  fact: 'A deep rework of the Su-27 with thrust vectoring engines, no canards and a large internal fuel load. The engines are spaced far apart with a lifting tunnel between them that carries missiles.',
+  est: ['radius'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.48, 0.48, 0.45, 0, 2], [3.5, 0.72, 0.72, 0.62, 0.05, 2.1], [5.5, 0.82, 0.85, 0.62, 0.12, 2.2], [7.5, 0.95, 0.85, 0.55, 0.1, 2.4], [10, 1.4, 0.6, 0.35, 0, 3], [14, 1.5, 0.45, 0.3, 0, 3.5], [17.5, 0.9, 0.35, 0.3, 0, 3], [20.5, 0.35, 0.3, 0.3, 0, 2], [21.9, 0.2, 0.2, 0.2, 0, 2]], { capF: 'dark' }),
+    pod([[8.0, 0.55, 0.55, 0.62, -0.75, 4], [10, 0.62, 0.6, 0.62, -0.7, 3.5], [14, 0.62, 0.62, 0.62, -0.55, 2.5], [18, 0.6, 0.6, 0.6, -0.4, 2], [19.8, 0.58, 0.58, 0.58, -0.35, 2]], 1.25, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.82], [4.2, 0.42, 0.45, 0.05, 0.9], [5.8, 0.48, 0.55, 0.05, 0.96], [7.2, 0.4, 0.4, 0.05, 0.95], [8.8, 0.12, 0.08, 0.02, 0.9]]),
+    wing('wing', [[6.0, 0.05, 0.7, 10.0, 0.02], [9.3, 0.0, 2.6, 7.4, 0.04], [13.53, 0.0, 7.3, 1.8, 0.04]]),
+    surf(trap(18.0, -0.35, 2.3, 3.1, 5.0, 42, 1.2, 0, 0.04)),
+    surf(vfin(15.5, 0.2, 2.05, 3.6, 3.0, 40, 1.5, 0, 0.045)),
+    noz({ s: 21.0, z: 1.25, y: -0.35, r: 0.58, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 100 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.8, c: 0.4, mirror: true, max: 300, fixed: true },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.6, c: 0.4, mirror: true, max: 1500, fixed: true },
+    { id: 'W3', label: 'Inboard', on: 'wing', f: 0.36, c: 0.4, mirror: true, max: 1500, fixed: true },
+    { id: 'Tunnel', label: 'Between engines', at: [13.5, -0.35, 0.42], kind: 'conf', mirror: true, max: 700 },
+    { id: 'Nac', label: 'Under intake', at: [9.8, -1.38, 1.25], mirror: true, max: 700, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Twelve missiles: R-77s, R-27s and R-73s, with Khibiny jamming pods on the tips.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'R-77', W3: 'R-77', Tunnel: ['R-77', 2], Nac: 'R-27ER' } },
+    { name: 'SEAD', note: 'Kh-31P anti-radiation missiles.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'Kh-31P', W3: 'Kh-31P', Tunnel: 'R-77', Nac: 'R-77' } },
+    { name: 'Precision strike', note: 'Laser-guided KAB-500L bombs.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'R-77', W3: 'KAB-500L', Tunnel: ['KAB-500L', 1], Nac: 'R-77' } },
+    { name: 'Iron bombs', note: 'FAB-500s on the wing and tunnel.', set: { Tip: 'Khibiny', W1: 'R-73', W2: 'FAB-500', W3: 'FAB-500', Tunnel: ['FAB-500', 2] } },
+  ],
+});
+
+A({
+  key: 'su57', name: 'Su-57 Felon', short: 'Su-57', nick: 'Felon', variant: 'Series production',
+  role: 'Stealth multirole fighter', cat: 'Fighter', gen: 5, country: 'Russia', maker: 'Sukhoi (United Aircraft Corporation)',
+  first: 2010, intro: 2020, built: 'about 30', status: 'In low-rate production', crew: 1,
+  paint: '#8e979f', paint2: '#6d7780',
+  dims: { len: 20.1, span: 14.1, height: 4.6, wingArea: 78.8 },
+  wt: { empty: 18000, mtow: 35000, fuel: 10300 },
+  eng: { n: 2, name: 'Saturn AL-41F1 (izdeliye 117)', type: 'Afterburning turbofan', dry: 88.3, wet: 142.2, bypass: 0.59, tv: '3D, ±15°' },
+  perf: { mach: 2.0, vmax: 2135, cruise: 'Supercruise about Mach 1.3', ceil: 20000, radius: 1500, ferry: 4500, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '2 tandem main bays, 2 side bays, 6 external', payload: 10000,
+  fact: 'Russia\'s first stealth fighter keeps its missiles in two long tandem bays between widely spaced engines, with small side bays in the wing roots for dogfight missiles.',
+  est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'payload', 'ferry'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.5, 0.42, 0.38, 0, 1.6], [3.6, 0.75, 0.65, 0.55, 0.05, 1.6], [5.6, 1.0, 0.75, 0.55, 0.08, 1.7], [7.5, 1.8, 0.65, 0.45, 0, 1.9], [11, 2.1, 0.55, 0.4, 0, 2.2], [15, 1.9, 0.45, 0.35, 0, 2.2], [18, 1.4, 0.35, 0.3, 0, 2.2], [19.5, 0.8, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
+    pod([[6.8, 0.55, 0.45, 0.6, -0.65, 3], [9, 0.62, 0.5, 0.62, -0.6, 3], [13, 0.62, 0.55, 0.62, -0.5, 2.5], [17, 0.58, 0.55, 0.58, -0.4, 2], [19.2, 0.56, 0.56, 0.56, -0.35, 2]], 1.35, { capF: 'hole' }),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.62], [3.8, 0.4, 0.42, 0.05, 0.7], [5.3, 0.45, 0.5, 0.05, 0.75], [6.8, 0.3, 0.3, 0.05, 0.75], [8.0, 0.05, 0.05, 0.02, 0.72]]),
+    wing('wing', [[5.5, 0.0, 1.1, 11.0, 0.02], [8.8, 0.0, 2.4, 8.2, 0.035], [13.8, 0.0, 6.9, 1.9, 0.04]]),
+    surf(trap(16.2, -0.2, 2.3, 3.2, 5.2, 45, 1.4, 0, 0.04)),
+    surf(vfin(14.6, 0.3, 1.75, 3.0, 2.4, 45, 1.3, 26, 0.04)),
+    noz({ s: 20.1, z: 1.35, y: -0.35, r: 0.58, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Bay 1', label: 'Forward main bay', at: [9.9, -0.3, 0], kind: 'bay', max: 1500, bay: { len: 4.4, w: 1.0, h: 0.7 } },
+    { id: 'Bay 2', label: 'Aft main bay', at: [14.6, -0.28, 0], kind: 'bay', max: 1500, bay: { len: 4.4, w: 1.0, h: 0.7 } },
+    { id: 'Side', label: 'Wing-root side bay', at: [7.6, -0.2, 1.7], kind: 'bay', mirror: true, bay: { len: 3.2, w: 0.4, h: 0.4 } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.35, c: 0.4, mirror: true, max: 1500 },
+    { id: 'W2', label: 'Outboard', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500 },
+  ],
+  loadouts: [
+    { name: 'Stealth air-to-air', note: 'Four R-77s in the main bays, an R-73 in each side bay.', set: { 'Bay 1': ['R-77', 2], 'Bay 2': ['R-77', 2], Side: 'R-73' } },
+    { name: 'Stealth strike', note: 'Two Kh-59MK2 cruise missiles plus R-77s.', set: { 'Bay 1': 'Kh-59MK2', 'Bay 2': ['R-77', 2], Side: 'R-73' } },
+    { name: 'Heavy external', note: 'Stealth traded for payload.', set: { 'Bay 1': ['R-77', 2], 'Bay 2': ['R-77', 2], Side: 'R-73', W1: 'Kh-31P', W2: 'R-77' } },
+  ],
+});
+
+A({
+  key: 'mig29', name: 'MiG-29A Fulcrum-A', short: 'MiG-29A', nick: 'Fulcrum', variant: '9.12',
+  role: 'Air superiority fighter', cat: 'Fighter', gen: 4, country: 'Soviet Union', maker: 'Mikoyan',
+  first: 1977, intro: 1983, built: '1,600+ (all variants)', status: 'In service with about 30 air forces', crew: 1,
+  paint: '#9aa3a8', paint2: '#7c8a90',
+  dims: { len: 17.32, span: 11.36, height: 4.73, wingArea: 38 },
+  wt: { empty: 11000, mtow: 18000, fuel: 3500 },
+  eng: { n: 2, name: 'Klimov RD-33', type: 'Afterburning turbofan', dry: 49.4, wet: 81.4, bypass: 0.49, sfc: [0.77, 2.05] },
+  perf: { mach: 2.25, vmax: 2400, ceil: 18000, radius: 700, ferry: 2100, g: '+9' },
+  gun: 'GSh-30-1 30 mm, 150 rounds', hard: '7 (6 underwing, 1 centreline)', payload: 3500,
+  fact: 'Built for short, rough airfields: doors close the main intakes on the ground and air comes in through louvres on top of the wing roots, so the engines do not swallow debris.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.42, 0.42, 0.4, 0, 2], [3, 0.62, 0.62, 0.55, 0.05, 2.1], [4.8, 0.72, 0.75, 0.55, 0.12, 2.2], [6.6, 0.8, 0.7, 0.5, 0.1, 2.4], [9, 1.2, 0.5, 0.3, 0, 3], [12.5, 1.25, 0.4, 0.3, 0, 3.5], [15, 0.7, 0.3, 0.25, 0, 3], [16.6, 0.3, 0.25, 0.25, 0, 2]], { capF: 'dark' }),
+    pod([[6.2, 0.45, 0.45, 0.55, -0.65, 4], [8, 0.52, 0.5, 0.55, -0.6, 3.5], [11.5, 0.52, 0.5, 0.52, -0.45, 2.5], [15, 0.5, 0.5, 0.5, -0.35, 2], [16.6, 0.48, 0.48, 0.48, -0.3, 2]], 1.05, { capF: 'hole' }),
+    canopy([[3.0, 0.05, 0.02, 0.02, 0.72], [3.8, 0.4, 0.42, 0.05, 0.8], [5.2, 0.44, 0.5, 0.05, 0.85], [6.5, 0.36, 0.36, 0.05, 0.85], [7.8, 0.1, 0.06, 0.02, 0.8]]),
+    wing('wing', [[4.6, 0.0, 0.6, 8.6, 0.02], [7.5, 0, 2.0, 5.4, 0.04], [10.8, 0, 5.68, 1.3, 0.04]]),
+    surf(trap(14.4, -0.3, 1.8, 2.6, 3.9, 50, 1.0, 0, 0.04)),
+    surf(vfin(12.2, 0.25, 1.55, 3.1, 2.4, 47, 1.2, 6, 0.045)),
+    noz({ s: 17.32, z: 1.05, y: -0.3, r: 0.5, len: 1.1, mirror: true }),
+  ],
+  stations: [
+    { id: '1/6', label: 'Outboard', on: 'wing', f: 0.84, c: 0.4, mirror: true, max: 100, fixed: true, drop: 0.2 },
+    { id: '2/5', label: 'Midboard', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500, fixed: true },
+    { id: '3/4', label: 'Inboard', on: 'wing', f: 0.38, c: 0.4, mirror: true, max: 500, fixed: true },
+    { id: '7', label: 'Centreline (between engines)', at: [11.0, -0.35, 0], max: 1500, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'Air superiority', note: 'Two R-27ERs and four R-73s with the centreline tank.', set: { '1/6': 'R-73', '2/5': 'R-73', '3/4': 'R-27ER', '7': 'PTB-1500' } },
+    { name: 'Dogfight', note: 'Short-range missiles only.', set: { '1/6': 'R-60M', '2/5': 'R-73', '3/4': 'R-73' } },
+    { name: 'Ground attack', note: 'Four FAB-500s.', set: { '1/6': 'R-73', '2/5': 'FAB-500', '3/4': 'FAB-500', '7': 'PTB-1500' } },
+  ],
+});
+
+A({
+  key: 'mig31', name: 'MiG-31BM Foxhound', short: 'MiG-31BM', nick: 'Foxhound', variant: '',
+  role: 'Long-range interceptor', cat: 'Fighter', gen: 4, country: 'Soviet Union', maker: 'Mikoyan',
+  first: 1975, intro: 1981, built: '519', status: 'In service with Russia and Kazakhstan', crew: 2,
+  paint: '#a7aeb2', paint2: '#8b9398',
+  dims: { len: 22.62, span: 13.46, height: 6.15, wingArea: 61.6 },
+  wt: { empty: 21820, mtow: 46200, fuel: 16350 },
+  eng: { n: 2, name: 'Soloviev D-30F6', type: 'Afterburning turbofan', dry: 93.2, wet: 152, bypass: 0.57, sfc: [0.72, 1.9] },
+  perf: { mach: 2.83, vmax: 3000, cruise: 'Mach 2.35 sustained', ceil: 20600, radius: 720, ferry: 3300, g: '+5' },
+  gun: 'GSh-6-23 23 mm six-barrel, 260 rounds', hard: '4 belly (semi-recessed), 4 underwing', payload: 9000,
+  fact: 'Built from steel, titanium and aluminium to patrol the Arctic at Mach 2.35 against cruise missiles and SR-71s. The MiG-31K variant carries the Kinzhal ballistic missile on the centreline.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.8, 0.55, 0.55, 0.5, 0, 2], [3.8, 0.8, 0.8, 0.7, 0.05, 2.2], [5.5, 0.9, 0.95, 0.7, 0.12, 2.3], [7.5, 1.3, 0.85, 0.75, 0.05, 3], [10, 1.75, 0.75, 0.8, 0, 4], [15, 1.8, 0.7, 0.8, 0, 4], [19, 1.75, 0.65, 0.75, 0, 4], [21.8, 1.7, 0.6, 0.7, 0, 4]], { capF: 'dark' }),
+    pod([[7.2, 0.5, 0.85, 0.8, -0.05, 5], [9, 0.55, 0.85, 0.85, -0.05, 4], [11, 0.4, 0.7, 0.7, 0, 3]], 1.45, { capF: 'hole' }),
+    canopy([[3.8, 0.05, 0.02, 0.02, 0.86], [4.6, 0.42, 0.42, 0.05, 0.95], [6.2, 0.5, 0.55, 0.05, 1.0], [8.2, 0.5, 0.52, 0.05, 1.0], [9.8, 0.3, 0.28, 0.05, 0.95], [10.8, 0.06, 0.05, 0.02, 0.9]]),
+    wing('wing', trap(10.5, 0.6, 1.8, 6.2, 6.73, 41, 1.9, -5, 0.045)),
+    surf(trap(18.6, 0.15, 1.8, 3.2, 4.4, 50, 1.3, 0, 0.04)),
+    surf(vfin(16.2, 0.6, 1.35, 3.8, 3.2, 50, 1.6, 8, 0.045)),
+    noz({ s: 22.62, z: 0.78, r: 0.62, len: 1.4, mirror: true }),
+  ],
+  stations: [
+    { id: 'Belly F', label: 'Belly, forward pair', at: [11.8, -0.82, 0.8], kind: 'semi', mirror: true, max: 600 },
+    { id: 'Belly A', label: 'Belly, aft pair', at: [16.8, -0.82, 0.8], kind: 'semi', mirror: true, max: 600 },
+    { id: 'W1', label: 'Inboard wing', on: 'wing', f: 0.3, c: 0.4, mirror: true, max: 2500 },
+    { id: 'W2', label: 'Outboard wing', on: 'wing', f: 0.62, c: 0.4, mirror: true, max: 500 },
+    { id: 'CL', label: 'Centreline (MiG-31K)', at: [14.5, -0.8, 0], max: 4500, drop: 0.3 },
+  ],
+  loadouts: [
+    { name: 'Interceptor', note: 'Four R-37M very long range missiles under the belly, two tanks.', set: { 'Belly F': 'R-37M', 'Belly A': 'R-37M', W1: 'PTB-2500', W2: 'R-73' } },
+    { name: 'Classic', note: 'The original R-33 fit.', set: { 'Belly F': 'R-33', 'Belly A': 'R-33', W1: 'PTB-2500', W2: 'R-73' } },
+    { name: 'Kinzhal (MiG-31K)', note: 'An air-launched ballistic missile on the centreline.', set: { CL: 'Kh-47M2', W1: 'PTB-2500' } },
+  ],
+});
+
+A({
+  key: 'mig21', name: 'MiG-21bis Fishbed-L', short: 'MiG-21bis', nick: 'Fishbed', variant: '',
+  role: 'Interceptor and light fighter', cat: 'Fighter', gen: 3, country: 'Soviet Union', maker: 'Mikoyan-Gurevich',
+  first: 1955, intro: 1959, built: '11,496 (all variants, the most-built supersonic jet)', status: 'Still flown by a handful of air forces', crew: 1,
+  paint: '#b3b8ba', paint2: '#9aa0a3',
+  dims: { len: 14.7, span: 7.154, height: 4.1, wingArea: 23 },
+  wt: { empty: 5846, mtow: 10400, fuel: 2280 },
+  eng: { n: 1, name: 'Tumansky R25-300', type: 'Afterburning turbojet', dry: 40.2, wet: 69.6, bypass: 0, sfc: [0.96, 2.2], note: 'Emergency afterburner: 97.1 kN for up to 3 minutes below 4 km.' },
+  perf: { mach: 2.05, vmax: 2175, ceil: 17800, radius: 450, ferry: 1210, g: '+8.5' },
+  gun: 'GSh-23L 23 mm, 200 rounds', hard: '5 (4 underwing, 1 centreline)', payload: 2000,
+  fact: 'A small tailed delta with a nose intake and movable shock cone. Cheap and simple, it was built in greater numbers than any other supersonic aircraft.',
+  est: ['fuel', 'radius'],
+  geo: [
+    fus([[0, 0.45, 0.45, 0.45, 0, 2], [2, 0.55, 0.6, 0.55, 0.05, 2], [4, 0.62, 0.68, 0.58, 0.08, 2], [6, 0.62, 0.72, 0.6, 0.1, 2.1], [9, 0.62, 0.62, 0.58, 0.05, 2], [12, 0.56, 0.55, 0.55, 0, 2], [14.0, 0.5, 0.5, 0.5, 0, 2]], { capF: 'hole' }),
+    { t: 'loft', st: [[-0.7, 0.02, 0.02, 0.02], [0, 0.26, 0.26, 0.26], [0.6, 0.32, 0.32, 0.32]], mat: 'dark' },
+    fus([[3, 0.05, 0.05, 0.02, 0.6], [5.8, 0.32, 0.28, 0.05, 0.64], [11, 0.25, 0.15, 0.05, 0.55], [13, 0.05, 0.05, 0.02, 0.5]], { fine: 0 }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.58], [3.0, 0.36, 0.3, 0.05, 0.62], [4.4, 0.4, 0.42, 0.05, 0.66], [5.6, 0.32, 0.3, 0.05, 0.66], [6.0, 0.05, 0.05, 0.02, 0.62]]),
+    wing('wing', trap(6.4, -0.15, 0.5, 6.5, 3.58, 57, 0.9, -2, 0.045)),
+    surf(trap(12.1, -0.1, 0.5, 1.8, 1.95, 55, 0.5, 0, 0.04)),
+    { t: 'panel', sec: vfin(9.8, 0.45, 0, 3.4, 2.2, 60, 0.8, 0, 0.045) },
+    noz({ s: 14.7, r: 0.46, len: 0.8 }),
+  ],
+  stations: [
+    { id: '1/4', label: 'Outboard', on: 'wing', f: 0.72, c: 0.35, mirror: true, max: 250, fixed: true, drop: 0.2 },
+    { id: '2/3', label: 'Inboard', on: 'wing', f: 0.35, c: 0.35, mirror: true, max: 500, fixed: true },
+    { id: '5', label: 'Centreline', at: [8.8, -0.72, 0], max: 800, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Interceptor', note: 'Two R-60Ms, two R-13Ms and the centreline tank.', set: { '1/4': 'R-60M', '2/3': 'R-13M', '5': 'PTB-800' } },
+    { name: 'Ground attack', note: 'Two FAB-250s.', set: { '1/4': 'R-60M', '2/3': 'FAB-250', '5': 'PTB-800' } },
+    { name: 'Ferry', note: 'Three drop tanks.', set: { '2/3': 'PTB-490', '5': 'PTB-800' } },
+  ],
+});
+
+A({
+  key: 'typhoon', name: 'Eurofighter Typhoon', short: 'Typhoon', nick: '', variant: 'Tranche 3',
+  role: 'Multirole fighter', cat: 'Fighter', gen: 4.5, country: 'UK / Germany / Italy / Spain', maker: 'Eurofighter GmbH (Airbus, BAE Systems, Leonardo)',
+  first: 1994, intro: 2003, built: '600+', status: 'In production', crew: 1,
+  paint: '#8e979e', paint2: '#7b858d',
+  dims: { len: 15.96, span: 10.95, height: 5.28, wingArea: 51.2 },
+  wt: { empty: 11000, mtow: 23500, fuel: 4996 },
+  eng: { n: 2, name: 'Eurojet EJ200', type: 'Afterburning turbofan', dry: 60, wet: 90, bypass: 0.4 },
+  perf: { mach: 2.0, vmax: 2125, cruise: 'Supercruise about Mach 1.5', ceil: 19812, radius: 1389, ferry: 3790, g: '+9 / -3' },
+  gun: 'Mauser BK-27 27 mm, 150 rounds', hard: '13 (8 underwing, 4 fuselage, 1 centreline)', payload: 9000,
+  fact: 'An unstable canard delta that needs its flight computers to stay in the air, which makes it very agile. It can cruise above Mach 1 without afterburner.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.4, 0.42, 0.42, 0.4, 0, 2], [3.0, 0.6, 0.6, 0.55, 0.05, 2.1], [4.8, 0.68, 0.72, 0.62, 0.1, 2.2], [6.8, 0.85, 0.7, 0.8, 0, 2.6], [9.5, 1.05, 0.62, 0.75, 0, 2.8], [12.5, 0.95, 0.55, 0.55, 0, 2.6], [14.5, 0.85, 0.5, 0.5, 0, 2.4], [15.4, 0.8, 0.48, 0.48, 0, 2.3]], { capF: 'dark' }),
+    fus([[5.2, 0.72, 0.35, 0.35, -1.05, 4], [6.6, 0.75, 0.35, 0.4, -0.95, 4], [9, 0.6, 0.3, 0.3, -0.7, 3], [10.5, 0.3, 0.2, 0.2, -0.5, 2]], { capF: 'hole', fine: 0 }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.6], [3.6, 0.38, 0.4, 0.05, 0.68], [5.0, 0.42, 0.48, 0.05, 0.72], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.06, 0.05, 0.02, 0.66]]),
+    surf(trap(4.8, 0.1, 0.6, 1.7, 2.1, 50, 0.6, 0, 0.04)),
+    wing('wing', trap(7.0, -0.2, 0.85, 7.6, 5.2, 53, 1.2, 0, 0.04)),
+    { t: 'panel', sec: vfin(10.6, 0.5, 0, 3.8, 2.5, 50, 1.3, 0, 0.045) },
+    noz({ s: 15.96, z: 0.45, r: 0.46, len: 1.0, mirror: true }),
+  ],
+  stations: [
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.86, c: 0.35, mirror: true, max: 150, fixed: true, drop: 0.2 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.62, c: 0.35, mirror: true, max: 1000, fixed: true },
+    { id: 'W3', label: 'Inboard (wet)', on: 'wing', f: 0.36, c: 0.35, mirror: true, max: 1500, fixed: true },
+    { id: 'F-fwd', label: 'Fuselage, forward', at: [8.4, -0.9, 0.62], kind: 'semi', mirror: true, max: 200 },
+    { id: 'F-aft', label: 'Fuselage, aft', at: [12.0, -0.62, 0.62], kind: 'semi', mirror: true, max: 200 },
+    { id: 'CL', label: 'Centreline (wet)', at: [10.2, -0.95, 0], max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Quick reaction alert', note: 'Four Meteors semi-recessed, two IRIS-T, two tanks.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W3: 'Tank 1000L' } },
+    { name: 'Swing role', note: 'Paveway IVs and Meteors on one sortie, with a LITENING pod.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W2: ['Paveway IV', 2], W3: 'Tank 1000L', CL: 'LITENING' } },
+    { name: 'Deep strike', note: 'Two Storm Shadows on the inboard pylons.', set: { 'F-fwd': 'Meteor', 'F-aft': 'AIM-120C', W1: 'IRIS-T', W2: 'Tank 1000L', W3: 'Storm Shadow' } },
+    { name: 'Brimstone', note: 'Two launchers of three Brimstones for moving targets.', set: { 'F-fwd': 'Meteor', 'F-aft': 'Meteor', W1: 'IRIS-T', W2: 'Brimstone', W3: 'Tank 1000L', CL: 'LITENING' } },
+  ],
+});
+
+A({
+  key: 'rafale', name: 'Dassault Rafale C', short: 'Rafale', nick: '', variant: 'F3-R / F4',
+  role: 'Omnirole fighter', cat: 'Fighter', gen: 4.5, country: 'France', maker: 'Dassault Aviation',
+  first: 1986, intro: 2001, built: '300+', status: 'In production', crew: 1,
+  paint: '#8a9298', paint2: '#747c82',
+  dims: { len: 15.27, span: 10.9, height: 5.34, wingArea: 45.7 },
+  wt: { empty: 9850, mtow: 24500, fuel: 4700 },
+  eng: { n: 2, name: 'Safran M88-2', type: 'Afterburning turbofan', dry: 50.04, wet: 75.62, bypass: 0.3 },
+  perf: { mach: 1.8, vmax: 1912, cruise: 'Supercruise Mach 1.4 with 6 missiles', ceil: 15835, radius: 1850, ferry: 3700, g: '+9 / -3.6' },
+  gun: 'GIAT 30M791 30 mm, 125 rounds', hard: '14 (13 on the navy M)', payload: 9500,
+  fact: 'France builds every major part itself: airframe, M88 engines, radar and weapons. The Rafale also carries the ASMP-A nuclear missile for France\'s airborne deterrent.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.4, 0.38, 0.36, 0, 2], [2.8, 0.58, 0.56, 0.5, 0.05, 2.1], [4.5, 0.68, 0.7, 0.58, 0.1, 2.2], [6.5, 1.15, 0.65, 0.62, 0, 2.8], [9.5, 1.2, 0.6, 0.6, 0, 3], [12.5, 1.0, 0.55, 0.55, 0, 2.8], [14.4, 0.9, 0.5, 0.5, 0, 2.4]], { capF: 'dark' }),
+    pod([[5.0, 0.35, 0.45, 0.5, -0.45, 2.2], [6.5, 0.4, 0.45, 0.5, -0.4, 2.5], [8.5, 0.35, 0.4, 0.4, -0.3, 2]], 0.95, { capF: 'hole' }),
+    canopy([[2.6, 0.05, 0.02, 0.02, 0.58], [3.4, 0.38, 0.4, 0.05, 0.66], [4.8, 0.42, 0.48, 0.05, 0.7], [6.2, 0.3, 0.28, 0.05, 0.7], [7.2, 0.06, 0.05, 0.02, 0.66]]),
+    surf(trap(5.8, 0.25, 0.95, 1.6, 2.5, 50, 0.6, 5, 0.04)),
+    wing('wing', trap(7.0, -0.15, 0.95, 7.2, 5.1, 48, 1.2, 0, 0.04)),
+    { t: 'panel', sec: vfin(10.3, 0.5, 0, 3.8, 2.7, 50, 1.2, 0, 0.045) },
+    noz({ s: 15.27, z: 0.45, r: 0.44, len: 0.9, mirror: true }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 120 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.76, c: 0.38, mirror: true, max: 150, fixed: true, drop: 0.22 },
+    { id: 'W2', label: 'Midboard', on: 'wing', f: 0.5, c: 0.38, mirror: true, max: 1300, fixed: true },
+    { id: 'W3', label: 'Inboard (wet)', on: 'wing', f: 0.24, c: 0.38, mirror: true, max: 2000, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [10.5, -0.62, 0.72], kind: 'conf', mirror: true, max: 250 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.8, -0.62, 0], max: 1300, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Air defence', note: 'Two Meteors, four MICAs, three tanks.', set: { Tip: 'MICA', W1: 'MICA', W2: 'Meteor', W3: 'Tank 2000L', CL: 'Tank 1250L' } },
+    { name: 'Deep strike (SCALP)', note: 'Two SCALP cruise missiles, the load used over Libya and Syria.', set: { Tip: 'MICA', W1: 'MICA', W2: 'Tank 2000L', W3: 'Storm Shadow', CL: 'Tank 1250L' } },
+    { name: 'AASM Hammer', note: 'Six rocket-boosted guided bombs with a TALIOS pod.', set: { Tip: 'MICA', W1: 'MICA', W2: ['AASM', 3], W3: 'Tank 2000L', F: 'TALIOS' } },
+    { name: 'Nuclear (ASMP-A)', note: 'France\'s airborne deterrent: one ASMP-A on the centreline.', set: { Tip: 'MICA', W1: 'MICA', W3: 'Tank 2000L', CL: 'ASMP-A' } },
+  ],
+});
+
+A({
+  key: 'gripen', name: 'Saab JAS 39C Gripen', short: 'Gripen C', nick: 'Gripen', variant: '',
+  role: 'Light multirole fighter', cat: 'Fighter', gen: 4.5, country: 'Sweden', maker: 'Saab',
+  first: 1988, intro: 1996, built: '280+ (all variants)', status: 'In service; Gripen E in production', crew: 1,
+  paint: '#8c959b', paint2: '#79838a',
+  dims: { len: 14.1, span: 8.4, height: 4.5, wingArea: 25.54 },
+  wt: { empty: 6800, mtow: 14000, fuel: 2400 },
+  eng: { n: 1, name: 'Volvo Aero RM12 (licensed GE F404)', type: 'Afterburning turbofan', dry: 54, wet: 80.5, bypass: 0.31 },
+  perf: { mach: 2.0, vmax: 2130, ceil: 15240, radius: 800, ferry: 3200, g: '+9 / -3' },
+  gun: 'Mauser BK-27 27 mm, 120 rounds', hard: '8 (2 wingtip, 4 underwing, 2 fuselage/centreline)', payload: 5300,
+  fact: 'Designed to fly from 800 m stretches of Swedish road, rearmed and refuelled by conscripts in ten minutes. Close-coupled canards help it stop in short distances.',
+  est: ['fuel'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.3, 0.38, 0.38, 0.36, 0, 2], [2.8, 0.52, 0.52, 0.48, 0.05, 2.1], [4.4, 0.6, 0.62, 0.52, 0.1, 2.2], [6.2, 0.95, 0.6, 0.55, 0, 2.6], [9, 0.95, 0.55, 0.55, 0, 2.6], [11.8, 0.75, 0.5, 0.5, 0, 2.3], [13.3, 0.52, 0.45, 0.45, 0, 2]], { capF: 'dark' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.1, 2.5], [6.2, 0.35, 0.45, 0.45, -0.1, 2.5], [8, 0.3, 0.4, 0.4, -0.05, 2]], 0.8, { capF: 'hole' }),
+    canopy([[2.4, 0.05, 0.02, 0.02, 0.55], [3.2, 0.36, 0.38, 0.05, 0.62], [4.6, 0.4, 0.45, 0.05, 0.66], [5.8, 0.3, 0.28, 0.05, 0.66], [6.8, 0.05, 0.05, 0.02, 0.62]]),
+    surf(trap(5.3, 0.2, 0.8, 1.8, 2.35, 45, 0.8, 0, 0.04)),
+    wing('wing', [[7.0, -0.15, 0.85, 5.8, 0.04], [8.6, -0.15, 2.4, 3.9, 0.04], [11.0, -0.15, 4.2, 1.3, 0.04]]),
+    { t: 'panel', sec: vfin(9.4, 0.45, 0, 3.2, 2.5, 48, 1.1, 0, 0.045) },
+    noz({ s: 14.1, r: 0.42, len: 0.9 }),
+  ],
+  stations: [
+    { id: 'Tip', label: 'Wingtip', on: 'wing', f: 1, c: 0.5, kind: 'rail', mirror: true, max: 100 },
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.7, c: 0.35, mirror: true, max: 350, fixed: true, drop: 0.22 },
+    { id: 'W2', label: 'Inboard (wet)', on: 'wing', f: 0.3, c: 0.35, mirror: true, max: 1400, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [9.0, -0.6, 0.55], kind: 'conf', mirror: true, max: 250 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.4, -0.62, 0], max: 1100, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Air defence', note: 'Four AMRAAMs and two IRIS-T.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'AIM-120C', CL: 'Tank 1100L' } },
+    { name: 'Meteor', note: 'Long-range fit with two Meteors.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'Meteor', CL: 'Tank 1100L' } },
+    { name: 'Anti-ship', note: 'Two RBS 15F sea skimmers.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'RBS 15F', CL: 'Tank 1100L' } },
+    { name: 'Strike', note: 'Laser-guided bombs with a LITENING pod.', set: { Tip: 'IRIS-T', W1: 'AIM-120C', W2: 'GBU-12', F: 'LITENING', CL: 'Tank 1100L' } },
+  ],
+});
+
+A({
+  key: 'j20', name: 'Chengdu J-20 Mighty Dragon', short: 'J-20', nick: 'Mighty Dragon', variant: 'J-20A',
+  role: 'Stealth air superiority fighter', cat: 'Fighter', gen: 5, country: 'China', maker: 'Chengdu Aircraft Corporation',
+  first: 2011, intro: 2017, built: 'about 300 (estimated)', status: 'In production', crew: 1,
+  paint: '#7e868c', paint2: '#686f75',
+  dims: { len: 20.4, span: 12.88, height: 4.45, wingArea: 73 },
+  wt: { empty: 17000, mtow: 37000, fuel: 12000 },
+  eng: { n: 2, name: 'Shenyang WS-10C', type: 'Afterburning turbofan', dry: 89, wet: 142, bypass: 0.7 },
+  perf: { mach: 2.0, vmax: 2100, ceil: 20000, radius: 2000, ferry: 5500, g: '+9' },
+  gun: 'None', hard: 'Main bay (4-6 missiles), 2 side bays, 4 underwing', payload: 11000,
+  fact: 'A long, heavy canard delta built for range. Its side bays swing their missiles out on rails before the doors shut, so it can fire short-range missiles with the bay closed.',
+  est: ['empty', 'mtow', 'fuel', 'radius', 'ceil', 'ferry', 'payload', 'eng', 'wingArea', 'vmax'],
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.5, 0.42, 0.38, 0, 1.6], [3.8, 0.78, 0.65, 0.55, 0.05, 1.6], [5.8, 1.0, 0.75, 0.55, 0.08, 1.7], [8, 1.6, 0.65, 0.5, 0, 1.8], [12, 1.9, 0.55, 0.45, 0, 2], [16, 1.7, 0.45, 0.4, 0, 2.1], [18.8, 1.3, 0.38, 0.35, 0, 2.3], [19.8, 1.1, 0.35, 0.33, 0, 2.3]], { capF: 'dark' }),
+    pod([[5.6, 0.45, 0.5, 0.55, -0.1, 1.6], [7.2, 0.52, 0.52, 0.55, -0.08, 1.8], [9.5, 0.45, 0.45, 0.45, -0.05, 2]], 1.25, { capF: 'hole' }),
+    canopy([[3.2, 0.05, 0.02, 0.02, 0.6], [4.0, 0.4, 0.42, 0.05, 0.7], [5.6, 0.45, 0.5, 0.05, 0.75], [7.2, 0.3, 0.3, 0.05, 0.75], [8.4, 0.05, 0.05, 0.02, 0.72]], { mat: 'gold' }),
+    surf(trap(7.2, 0.25, 1.2, 2.4, 3.5, 50, 0.8, 0, 0.04)),
+    wing('wing', [[8.0, 0.05, 1.3, 9.0, 0.02], [10.4, 0.0, 2.3, 7.0, 0.035], [14.4, 0.0, 6.44, 1.9, 0.04]]),
+    surf(vfin(15.8, -0.4, 0.95, 2.0, 0.7, 55, 1.0, 150, 0.04)),
+    surf(vfin(15.2, 0.4, 1.1, 2.8, 2.2, 45, 1.2, 30, 0.04)),
+    noz({ s: 20.4, z: 0.62, r: 0.55, len: 1.3, mirror: true }),
+  ],
+  stations: [
+    { id: 'Main', label: 'Main bay', at: [11.4, -0.15, 0], kind: 'bay', max: 1000, bay: { len: 4.6, w: 1.6, h: 0.65 } },
+    { id: 'Side', label: 'Side bay', at: [9.6, -0.1, 1.3], kind: 'bay', mirror: true, bay: { len: 3.4, w: 0.42, h: 0.45 } },
+    { id: 'W1', label: 'Inboard', on: 'wing', f: 0.3, c: 0.4, mirror: true },
+    { id: 'W2', label: 'Outboard', on: 'wing', f: 0.58, c: 0.4, mirror: true },
+  ],
+  loadouts: [
+    { name: 'Stealth air-to-air', note: 'Four PL-15s in the main bay, a PL-10 in each side bay.', set: { Main: ['PL-15', 4], Side: 'PL-10' } },
+    { name: 'Ferry', note: 'Four external tanks for deployment.', set: { Main: ['PL-15', 4], Side: 'PL-10', W1: 'PTB-2000', W2: 'PTB-2000' } },
+  ],
+});
+
+A({
+  key: 'm2000', name: 'Dassault Mirage 2000C', short: 'Mirage 2000C', nick: '', variant: 'RDI',
+  role: 'Interceptor and air superiority fighter', cat: 'Fighter', gen: 4, country: 'France', maker: 'Dassault Aviation',
+  first: 1978, intro: 1984, built: '601 (all variants)', status: 'In service with 8 air forces', crew: 1,
+  paint: '#8f989e', paint2: '#7b858b',
+  dims: { len: 14.36, span: 9.13, height: 5.2, wingArea: 41 },
+  wt: { empty: 7500, mtow: 17000, fuel: 3160 },
+  eng: { n: 1, name: 'Snecma M53-P2', type: 'Afterburning turbofan', dry: 64.3, wet: 95.1, bypass: 0.36 },
+  perf: { mach: 2.2, vmax: 2336, ceil: 17060, radius: 740, ferry: 3335, g: '+9 / -3.2' },
+  gun: '2 × DEFA 554 30 mm, 125 rounds each', hard: '9 (4 underwing, 5 fuselage)', payload: 6300,
+  fact: 'A pure tailless delta like the Mirage III, but made unstable and flown by wire so it can turn hard at low speed. The M53 is a single-shaft engine, unusual for a turbofan.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.5, 0.4, 0.4, 0.4, 0, 2], [3.2, 0.55, 0.58, 0.52, 0.05, 2.1], [4.8, 0.6, 0.65, 0.55, 0.1, 2.2], [6.5, 0.62, 0.62, 0.6, 0.05, 2.2], [9, 0.62, 0.6, 0.6, 0, 2.2], [12, 0.58, 0.55, 0.55, 0, 2], [13.6, 0.52, 0.5, 0.5, 0, 2]], { capF: 'dark' }),
+    pod([[4.8, 0.3, 0.42, 0.42, -0.05, 1.6], [6.5, 0.35, 0.48, 0.48, 0, 2], [9, 0.3, 0.4, 0.4, 0, 2]], 0.75, { capF: 'hole' }),
+    canopy([[2.8, 0.05, 0.02, 0.02, 0.58], [3.6, 0.36, 0.38, 0.05, 0.66], [5.0, 0.4, 0.46, 0.05, 0.7], [6.4, 0.3, 0.28, 0.05, 0.7], [7.4, 0.05, 0.05, 0.02, 0.66]]),
+    wing('wing', trap(6.0, -0.2, 0.6, 8.0, 4.56, 58, 0.9, 0, 0.045)),
+    { t: 'panel', sec: vfin(9.3, 0.5, 0, 4.0, 2.9, 57, 1.0, 0, 0.045) },
+    noz({ s: 14.36, r: 0.5, len: 1.0 }),
+  ],
+  stations: [
+    { id: 'W1', label: 'Outboard', on: 'wing', f: 0.76, c: 0.4, mirror: true, max: 200, fixed: true, drop: 0.2 },
+    { id: 'W2', label: 'Inboard (wet)', on: 'wing', f: 0.36, c: 0.4, mirror: true, max: 1800, fixed: true },
+    { id: 'F', label: 'Fuselage', at: [9.4, -0.72, 0.52], kind: 'conf', mirror: true, max: 400 },
+    { id: 'CL', label: 'Centreline (wet)', at: [9.0, -0.62, 0], max: 1800, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Intercept', note: 'Two Super 530D and two Magic 2 with the centreline tank.', set: { W1: 'Magic 2', W2: 'Super 530D', CL: 'Tank 1300L' } },
+    { name: 'Long patrol', note: 'Three tanks.', set: { W1: 'Magic 2', W2: 'Tank 1300L', CL: 'Tank 1300L' } },
+    { name: 'Ground attack', note: 'Four bombs on the fuselage.', set: { W1: 'Magic 2', W2: 'Tank 1300L', F: ['Mk 82', 2] } },
+  ],
+});
+
+A({
+  key: 'tornado', name: 'Panavia Tornado IDS', short: 'Tornado', nick: '', variant: 'IDS / GR4',
+  role: 'Low-level strike aircraft', cat: 'Fighter', gen: 4, country: 'UK / Germany / Italy', maker: 'Panavia',
+  first: 1974, intro: 1979, built: '992 (all variants)', status: 'Retired by the UK in 2019; in service with Germany, Italy, Saudi Arabia', crew: 2,
+  paint: '#6f7a70', paint2: '#5a645c',
+  dims: { len: 16.72, span: 13.91, spanSwept: 8.6, height: 5.95, wingArea: 26.6 },
+  wt: { empty: 13890, mtow: 28000, fuel: 5090 },
+  eng: { n: 2, name: 'Turbo-Union RB199-34R Mk 103', type: 'Afterburning turbofan (three-spool)', dry: 43.8, wet: 76.8, bypass: 1.1 },
+  sweep: { def: 25, min: 25, max: 67 },
+  perf: { mach: 2.2, vmax: 2417, cruise: 'Mach 0.92 at 60 m above ground', ceil: 15240, radius: 1390, ferry: 3890, g: '+7.5' },
+  gun: 'Mauser BK-27 27 mm, 180 rounds', hard: '7 (3 fuselage, 4 swivelling wing)', payload: 9000,
+  fact: 'Built to run in at treetop height at night, following the terrain automatically. Its underwing pylons swivel as the wings sweep so the stores always point into the airflow.',
+  geo: [
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.6, 0.48, 0.48, 0.45, 0, 2], [3.4, 0.65, 0.68, 0.6, 0.08, 2.2], [5.2, 0.72, 0.8, 0.62, 0.12, 2.3], [7.2, 1.25, 0.8, 0.62, 0.05, 3.2], [10, 1.4, 0.75, 0.6, 0, 3.4], [13.5, 1.3, 0.65, 0.6, 0, 3], [15.5, 1.0, 0.6, 0.55, 0, 2.6], [16.2, 0.95, 0.55, 0.55, 0, 2.4]], { capF: 'dark' }),
+    pod([[6.2, 0.45, 0.62, 0.55, 0.0, 4], [7.6, 0.5, 0.62, 0.6, 0, 3.5], [10, 0.4, 0.5, 0.5, 0, 3]], 1.1, { capF: 'hole' }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 0.76], [4.2, 0.42, 0.42, 0.05, 0.86], [5.8, 0.48, 0.5, 0.05, 0.92], [7.5, 0.44, 0.44, 0.05, 0.92], [8.6, 0.2, 0.15, 0.03, 0.86], [9.2, 0.05, 0.05, 0.02, 0.82]]),
+    surf([[6.8, 0.35, 1.2, 4.0, 0.03], [8.4, 0.35, 2.25, 2.6, 0.04]]),
+    wing('wing', [[8.3, 0.35, 2.25, 3.2, 0.05], [10.49, 0.35, 6.95, 1.4, 0.05]], { pivot: [9.3, 2.25], sweep: { def: 25 } }),
+    surf(trap(13.6, 0.0, 1.3, 3.2, 3.9, 55, 1.0, -3, 0.04)),
+    { t: 'panel', sec: vfin(10.8, 0.6, 0, 4.6, 3.2, 55, 1.4, 0, 0.045) },
+    noz({ s: 16.72, z: 0.55, r: 0.42, len: 0.9, mirror: true }),
+  ],
+  stations: [
+    { id: 'Shoulder', label: 'Fuselage shoulder', at: [10.2, -0.72, 0.85], kind: 'conf', mirror: true, max: 1400 },
+    { id: 'W-in', label: 'Inboard wing (swivelling)', on: 'wing', f: 0.22, c: 0.35, mirror: true, max: 2250, fixed: true },
+    { id: 'W-out', label: 'Outboard wing (swivelling)', on: 'wing', f: 0.62, c: 0.35, mirror: true, max: 500 },
+    { id: 'CL', label: 'Centreline', at: [10.8, -0.62, 0], max: 1000, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'Deep strike (GR4)', note: 'Two Storm Shadows on the shoulders, big 2,250 L wing tanks.', set: { Shoulder: 'Storm Shadow', 'W-in': 'Tank 2250L' } },
+    { name: 'Taurus (German IDS)', note: 'Two Taurus KEPD 350 stand-off missiles.', set: { Shoulder: 'Taurus', 'W-in': 'Tank 2250L', 'W-out': 'AIM-9M' } },
+    { name: 'Paveway IV', note: 'Four Paveway IVs with a LITENING pod.', set: { Shoulder: ['Paveway IV', 2], 'W-in': 'Tank 2250L', CL: 'LITENING' } },
+    { name: 'Brimstone', note: 'Four launchers, twelve Brimstones.', set: { Shoulder: ['Brimstone', 2], 'W-in': 'Tank 2250L', CL: 'LITENING' } },
+  ],
+});
+
+A({
+  key: 'a10', name: 'A-10C Thunderbolt II', short: 'A-10C', nick: 'Warthog', variant: '',
+  role: 'Close air support', cat: 'Attack', gen: 3, country: 'United States', maker: 'Fairchild Republic',
+  first: 1972, intro: 1977, built: '716', status: 'In service, being retired', crew: 1,
+  paint: '#7a8084', paint2: '#666c70',
+  dims: { len: 16.26, span: 17.53, height: 4.47, wingArea: 47 },
+  wt: { empty: 11321, mtow: 22680, fuel: 4990 },
+  eng: { n: 2, name: 'General Electric TF34-GE-100A', type: 'High-bypass turbofan', dry: 40.3, bypass: 6.2, sfc: [0.37, 0.37] },
+  perf: { mach: 0.62, vmax: 706, cruise: '560 km/h', ceil: 13700, radius: 460, ferry: 4150, g: '+7.33 / -3' },
+  gun: 'GAU-8/A Avenger 30 mm seven-barrel, 1,174 rounds', hard: '11 (8 underwing, 3 fuselage)', payload: 7260,
+  fact: 'Built around its 30 mm cannon, which is as long as a car. The pilot sits in a titanium bathtub, and the engines sit high and apart so one hit cannot kill both.',
+  geo: [
+    fus([[0, 0.25, 0.25, 0.25, 0, 2], [1, 0.55, 0.55, 0.55, 0, 2], [2.5, 0.75, 0.75, 0.72, 0.05, 2.3], [4.5, 0.85, 0.9, 0.75, 0.1, 2.5], [7, 0.9, 0.85, 0.8, 0, 2.6], [10, 0.78, 0.7, 0.7, 0, 2.4], [13, 0.5, 0.5, 0.5, 0.1, 2], [15, 0.35, 0.35, 0.35, 0.2, 2], [16.0, 0.2, 0.2, 0.2, 0.25, 2]], { capF: 'dark' }),
+    { t: 'loft', st: [[-0.5, 0.07, 0.07, 0.07, -0.25], [0.2, 0.09, 0.09, 0.09, -0.25]], mat: 'dark', seg: 8 },
+    canopy([[2.0, 0.05, 0.02, 0.02, 0.8], [2.8, 0.4, 0.45, 0.05, 0.9], [4.2, 0.44, 0.5, 0.05, 0.95], [5.6, 0.35, 0.32, 0.05, 0.95], [6.4, 0.05, 0.05, 0.02, 0.9]]),
+    wing('wingc', trap(6.4, -0.45, 0.8, 3.2, 3.2, 0, 3.0, 0, 0.16)),
+    wing('wing', trap(6.4, -0.45, 3.2, 3.0, 8.76, 2, 1.6, 7, 0.15, 0.13)),
+    pod([[9.8, 0.6, 0.6, 0.6, 1.25, 2], [10.3, 0.64, 0.64, 0.64, 1.25, 2], [12.6, 0.65, 0.65, 0.65, 1.25, 2], [13.6, 0.5, 0.5, 0.5, 1.25, 2]], 1.1, { capF: 'dark' }),
+    surf([[11.0, 0.55, 0.55, 1.6, 0.1], [11.2, 0.75, 0.75, 1.2, 0.1]]),
+    surf(trap(13.8, 0.3, 0.2, 2.3, 2.8, 0, 1.9, 0, 0.06)),
+    surf(vfin(14.0, -0.5, 2.8, 2.1, 2.4, 5, 1.6, 0, 0.06)),
+    noz({ s: 14.3, z: 1.1, y: 1.25, r: 0.45, len: 0.8, mirror: true, r2: 0.5 }),
+  ],
+  stations: [
+    { id: '1', label: 'Outboard left', on: 'wing', f: 0.92, c: 0.35, side: -1, max: 450, fixed: true, drop: 0.25 },
+    { id: '2', label: 'Outer wing left', on: 'wing', f: 0.62, c: 0.35, side: -1, max: 1135, fixed: true },
+    { id: '3/9', label: 'Inner wing', on: 'wing', f: 0.3, c: 0.35, mirror: true, max: 1135, fixed: true },
+    { id: '4/8', label: 'Wing root', on: 'wingc', f: 0.75, c: 0.35, mirror: true, max: 1590, fixed: true },
+    { id: '5/7', label: 'Fuselage', at: [7.8, -0.95, 0.55], mirror: true, max: 1590, drop: 0.2 },
+    { id: '10', label: 'Outer wing right', on: 'wing', f: 0.62, c: 0.35, max: 1135, fixed: true },
+    { id: '11', label: 'Outboard right', on: 'wing', f: 0.92, c: 0.35, max: 450, fixed: true, drop: 0.25 },
+  ],
+  loadouts: [
+    { name: 'Close air support', note: 'Mavericks, laser-guided and GPS bombs, Sidewinders and a targeting pod.', set: { '1': ['AIM-9M', 2], '2': 'Sniper', '3/9': 'AGM-65', '4/8': 'GBU-38', '5/7': 'GBU-12', '11': 'ALQ-184' } },
+    { name: 'Anti-armour', note: 'Six Mavericks on triple launchers and Sensor Fuzed Weapons.', set: { '1': ['AIM-9M', 2], '2': 'Sniper', '3/9': ['AGM-65', 3], '4/8': 'CBU-97', '11': 'ALQ-184' } },
+    { name: 'Iron bombs', note: 'Mk 82s on every heavy station.', set: { '1': ['AIM-9M', 2], '3/9': ['Mk 82', 3], '4/8': ['Mk 82', 3], '5/7': 'Mk 82', '11': 'ALQ-184' } },
+  ],
+});
+
+// ---- 36-bombers.js
+// Bombers. Same conventions as 35-aircraft.js.
+
+A({
+  key: 'b52h', name: 'B-52H Stratofortress', short: 'B-52H', nick: 'BUFF', variant: '',
+  role: 'Long-range strategic bomber', cat: 'Bomber', gen: null, country: 'United States', maker: 'Boeing',
+  first: 1952, intro: 1955, built: '744 (102 B-52H)', status: 'In service; re-engining as the B-52J with F130 engines', crew: 5,
+  paint: '#6d7275', paint2: '#5a5f62',
+  dims: { len: 48.5, span: 56.4, height: 12.4, wingArea: 370 },
+  wt: { empty: 83250, mtow: 219600, fuel: 141500 },
+  eng: { n: 8, name: 'Pratt & Whitney TF33-P-3/103', type: 'Low-bypass turbofan', dry: 76, bypass: 1.55, sfc: [0.52, 0.52] },
+  perf: { mach: 0.86, vmax: 1047, cruise: '844 km/h', ceil: 15000, radius: 7210, ferry: 16232, g: '+2' },
+  gun: 'None (tail gun removed in 1991)', hard: 'Internal bay with rotary launcher, 2 wing pylons', payload: 31500,
+  fact: 'Eight engines in four pairs and a wing that flexes about 6 m at the tips. The H model entered service in 1961 and the US Air Force plans to fly it into the 2050s, a century after the first B-52.',
+  est: ['fuel'],
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [1.5, 1.1, 1.1, 1.0, 0, 2], [4, 1.6, 1.7, 1.6, 0.1, 2.3], [7, 1.75, 1.95, 1.75, 0.2, 2.6], [12, 1.8, 2.0, 1.8, 0.2, 3], [25, 1.8, 2.0, 1.8, 0.2, 3], [35, 1.6, 1.8, 1.6, 0.3, 2.8], [42, 1.1, 1.3, 1.1, 0.5, 2.4], [47, 0.5, 0.7, 0.5, 0.8, 2], [48.5, 0.2, 0.3, 0.2, 0.9, 2]], { capF: 'dark', fine: 1 }),
+    canopy([[2.6, 0.05, 0.02, 0.02, 1.4], [3.4, 1.0, 0.5, 0.05, 1.55], [5.0, 1.25, 0.65, 0.05, 1.75], [6.4, 0.6, 0.35, 0.03, 1.95], [7.2, 0.05, 0.05, 0.02, 2.0]]),
+    wing('wing', trap(15.2, 1.6, 1.7, 12.0, 28.2, 36, 3.6, -3, 0.12, 0.09)),
+    pod([[15.8, 1.3, 0.85, 0.85, -0.25, 2.6], [17.5, 1.4, 0.9, 0.9, -0.25, 2.6], [21, 1.3, 0.8, 0.8, -0.25, 2.4], [22.3, 1.15, 0.7, 0.7, -0.25, 2.2]], 8.4, { capF: 'dark' }),
+    pod([[20.3, 1.3, 0.85, 0.85, -0.58, 2.6], [22.0, 1.4, 0.9, 0.9, -0.58, 2.6], [25.5, 1.3, 0.8, 0.8, -0.58, 2.4], [26.8, 1.15, 0.7, 0.7, -0.58, 2.2]], 14.6, { capF: 'dark' }),
+    surf([[17.6, 0.5, 8.4, 3.8, 0.08], [18.8, 1.2, 8.4, 3.6, 0.08]]),
+    surf([[22.1, 0.2, 14.6, 3.8, 0.08], [23.3, 0.85, 14.6, 3.6, 0.08]]),
+    pod([[31.5, 0.02, 0.02, 0.02, -0.3], [32.5, 0.42, 0.42, 0.42, -0.3], [36, 0.42, 0.42, 0.42, -0.3], [38, 0.02, 0.02, 0.02, -0.3]], 24.2, { mat: 'skin2' }),
+    { t: 'panel', sec: vfin(38.5, 1.6, 0, 8.4, 8.0, 38, 3.6, 0, 0.08) },
+    surf(trap(41.0, 1.2, 0.8, 6.4, 7.9, 35, 2.2, 0, 0.08)),
+    ...[7.8, 9.0].map(z => noz({ s: 22.8, z, y: -0.25, r: 0.45, len: 0.8, mirror: true })),
+    ...[14.0, 15.2].map(z => noz({ s: 27.3, z, y: -0.58, r: 0.45, len: 0.8, mirror: true })),
+  ],
+  stations: [
+    { id: 'Bay', label: 'Bomb bay (rotary launcher or clips)', at: [27.5, 0.6, 0], kind: 'bay', max: 20000, bay: { len: 8.6, w: 2.5, h: 2.4, arr: 'rotary' } },
+    { id: 'Pylon', label: 'Wing pylon (inboard of the engines)', on: 'wing', f: 0.13, c: 0.3, mirror: true, max: 5670, drop: 0.9 },
+  ],
+  loadouts: [
+    { name: 'Nuclear stand-off', note: 'Twenty AGM-86B cruise missiles: eight on the rotary launcher, six on each pylon.', set: { Bay: ['AGM-86B', 8], Pylon: ['AGM-86B', 6] } },
+    { name: 'JASSM', note: 'Twenty conventional stealthy cruise missiles.', set: { Bay: ['AGM-158', 8], Pylon: ['AGM-158', 6] } },
+    { name: 'JDAM', note: 'Eight 2,000 lb JDAMs inside, six on each pylon.', set: { Bay: ['GBU-31', 8], Pylon: ['GBU-31', 6] } },
+    { name: 'Carpet bombing', note: 'Fifty-one Mk 82s: 27 inside, 12 on each pylon.', set: { Bay: ['Mk 82', 27], Pylon: ['Mk 82', 12] } },
+  ],
+});
+
+A({
+  key: 'b1b', name: 'B-1B Lancer', short: 'B-1B', nick: 'Bone', variant: '',
+  role: 'Supersonic heavy bomber', cat: 'Bomber', gen: null, country: 'United States', maker: 'Rockwell International',
+  first: 1984, intro: 1986, built: '100 (plus 4 B-1A)', status: 'In service, to be replaced by the B-21', crew: 4,
+  paint: '#4e5357', paint2: '#43484c',
+  dims: { len: 44.5, span: 41.8, spanSwept: 24.1, height: 10.4, wingArea: 181 },
+  wt: { empty: 87100, mtow: 216400, fuel: 88450 },
+  eng: { n: 4, name: 'General Electric F101-GE-102', type: 'Afterburning turbofan', dry: 64.9, wet: 136.9, bypass: 2.01, sfc: [0.6, 2.2] },
+  sweep: { def: 15, min: 15, max: 67.5 },
+  perf: { mach: 1.25, vmax: 1335, cruise: 'Mach 0.92 at low level', ceil: 18000, radius: 5543, ferry: 11999, g: '+3' },
+  gun: 'None', hard: '3 internal bays (one with a movable bulkhead), 6 external (unused under New START)', payload: 34000,
+  fact: 'The largest internal payload of any US bomber. It flies low and fast with its wings swept back, riding terrain-following radar at night.',
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [2, 0.9, 0.85, 0.8, 0, 2], [5, 1.45, 1.35, 1.3, 0.1, 2.2], [9, 1.7, 1.6, 1.5, 0.15, 2.4], [14, 2.1, 1.6, 1.5, 0.1, 2.6], [20, 2.6, 1.4, 1.5, 0, 3], [28, 2.3, 1.35, 1.4, 0, 3], [36, 1.7, 1.25, 1.2, 0.1, 2.6], [41, 1.2, 1.1, 0.9, 0.3, 2.3], [44.5, 0.3, 0.4, 0.3, 0.6, 2]], { capF: 'dark', fine: 1 }),
+    canopy([[4.2, 0.05, 0.02, 0.02, 1.2], [5.2, 1.0, 0.5, 0.05, 1.3], [7, 1.25, 0.6, 0.05, 1.45], [8.5, 0.6, 0.3, 0.03, 1.55], [9.2, 0.05, 0.05, 0.02, 1.6]], { mat: 'dark' }),
+    surf([[13, 0.3, 2.2, 15.0, 0.04], [18.5, 0.3, 6.6, 8.0, 0.07]]),
+    wing('wing', [[18.8, 0.3, 6.6, 6.5, 0.08], [22.63, 0.3, 20.9, 2.2, 0.07]], { pivot: [21.5, 6.6], sweep: { def: 15 } }),
+    pod([[21, 1.55, 0.9, 0.95, -1.9, 4], [23, 1.65, 1.0, 1.0, -1.8, 3.5], [29, 1.6, 1.0, 1.0, -1.7, 3], [32.6, 1.5, 0.9, 0.9, -1.6, 2.5]], 3.3, { capF: 'hole' }),
+    { t: 'panel', sec: vfin(35.5, 1.3, 0, 7.2, 5.8, 45, 3.0, 0, 0.07) },
+    surf(trap(38.8, 3.4, 0.3, 4.8, 6.85, 40, 1.8, 0, 0.07)),
+    ...[2.55, 4.05].map(z => noz({ s: 33.4, z, y: -1.6, r: 0.62, len: 1.0, mirror: true })),
+  ],
+  stations: [
+    { id: 'Fwd', label: 'Forward bay', at: [15.8, 0.4, 0], kind: 'bay', max: 11300, bay: { len: 4.7, w: 2.2, h: 2.2, arr: 'rotary' } },
+    { id: 'Mid', label: 'Intermediate bay', at: [20.8, 0.4, 0], kind: 'bay', max: 11300, bay: { len: 4.7, w: 2.2, h: 2.2, arr: 'rotary' } },
+    { id: 'Aft', label: 'Aft bay', at: [36.2, 0.4, 0], kind: 'bay', max: 11300, bay: { len: 4.7, w: 2.0, h: 2.0, arr: 'rotary' } },
+    { id: 'Ext', label: 'External, forward right (pod)', at: [11.5, -1.45, 1.0], max: 250, drop: 0.2 },
+  ],
+  loadouts: [
+    { name: 'JDAM', note: 'Twenty-four 2,000 lb JDAMs on three rotary launchers, Sniper pod outside.', set: { Fwd: ['GBU-31', 8], Mid: ['GBU-31', 8], Aft: ['GBU-31', 8], Ext: 'Sniper' } },
+    { name: 'JASSM', note: 'Twenty-four stand-off cruise missiles.', set: { Fwd: ['AGM-158', 8], Mid: ['AGM-158', 8], Aft: ['AGM-158', 8], Ext: 'Sniper' } },
+    { name: 'Eighty-four Mk 82', note: 'Twenty-eight per bay on clip-in racks.', set: { Fwd: ['Mk 82', 28], Mid: ['Mk 82', 28], Aft: ['Mk 82', 28] } },
+    { name: 'Mixed', note: 'JDAMs forward, small JDAMs in the middle, JASSMs aft.', set: { Fwd: ['GBU-31', 8], Mid: ['GBU-38', 15], Aft: ['AGM-158', 8], Ext: 'Sniper' } },
+  ],
+});
+
+A({
+  key: 'b2a', name: 'B-2A Spirit', short: 'B-2A', nick: 'Spirit', variant: 'Block 30',
+  role: 'Stealth strategic bomber', cat: 'Bomber', gen: null, country: 'United States', maker: 'Northrop Grumman',
+  first: 1989, intro: 1997, built: '21', status: 'In service (19 remaining)', crew: 2,
+  paint: '#4c5155', paint2: '#40454a',
+  dims: { len: 21.0, span: 52.4, height: 5.18, wingArea: 460 },
+  wt: { empty: 71700, mtow: 170600, fuel: 75750 },
+  eng: { n: 4, name: 'General Electric F118-GE-100', type: 'Non-afterburning turbofan', dry: 77, bypass: 0.76, sfc: [0.65, 0.65] },
+  perf: { mach: 0.95, vmax: 1010, cruise: 'Mach 0.85', ceil: 15200, radius: 5550, ferry: 11100, g: '+2' },
+  gun: 'None', hard: '2 internal bays, each with a rotary launcher or bomb rack', payload: 18000,
+  fact: 'A flying wing with no tail at all: the saw-tooth trailing edge and split rudders do the steering. Its engines breathe through S-shaped ducts and exhaust over the wing so ground radar and infrared sensors cannot see the hot parts.',
+  geo: [
+    wing('wing', [[0, 0, 0, 21.0, 0.16], [1.69, 0, 2.6, 16.8, 0.14], [3.44, 0, 5.3, 12.56, 0.1], [7.14, -0.1, 11.0, 12.76, 0.08], [11.36, -0.2, 17.5, 4.54, 0.07], [17.0, -0.35, 26.2, 0.9, 0.06]], { mirror: true }),
+    fus([[1.0, 0.3, 0.2, 0.1, 0.4, 2.4], [3, 1.8, 0.95, 0.2, 0.6, 2.4], [6, 2.6, 1.5, 0.3, 0.7, 2.4], [10, 3.0, 1.4, 0.3, 0.6, 2.4], [15, 2.6, 0.9, 0.3, 0.4, 2.4], [19, 1.6, 0.4, 0.2, 0.2, 2.4], [20.5, 0.6, 0.2, 0.1, 0.1, 2.4]], { fine: 0 }),
+    canopy([[3.4, 0.05, 0.02, 0.02, 1.4], [4.0, 0.9, 0.3, 0.05, 1.5], [5.4, 1.1, 0.4, 0.05, 1.7], [6.4, 0.3, 0.1, 0.02, 1.8]], { mat: 'dark' }),
+    pod([[6.5, 0.8, 0.55, 0.2, 0.9, 2.5], [8, 1.2, 0.75, 0.3, 1.0, 3], [13, 1.2, 0.6, 0.3, 0.8, 3], [16.5, 0.9, 0.35, 0.2, 0.55, 2.5]], 3.4, { capF: 'hole' }),
+    ...[2.7, 4.1].map(z => noz({ shape: '2d', s: 17.2, z, y: 0.55, w: 0.55, h: 0.1, len: 0.8, mirror: true })),
+  ],
+  stations: [
+    { id: 'Bay', label: 'Weapons bay (one each side)', at: [9.6, 0.3, 1.45], kind: 'bay', mirror: true, max: 9000, bay: { len: 6.4, w: 2.2, h: 1.9, arr: 'rotary' } },
+  ],
+  loadouts: [
+    { name: 'JDAM', note: 'Sixteen 2,000 lb JDAMs on two rotary launchers.', set: { Bay: ['GBU-31', 8] } },
+    { name: 'Eighty small JDAMs', note: 'Eighty 500 lb GBU-38s on bomb rack assemblies, each aimed independently.', set: { Bay: ['GBU-38', 40] } },
+    { name: 'Nuclear', note: 'Sixteen B83 bombs.', set: { Bay: ['B83', 8] } },
+    { name: 'Bunker buster', note: 'Two GBU-57 Massive Ordnance Penetrators, 13.6 t each.', set: { Bay: 'GBU-57' } },
+    { name: 'JASSM', note: 'Sixteen stand-off missiles.', set: { Bay: ['AGM-158', 8] } },
+  ],
+});
+
+A({
+  key: 'tu160', name: 'Tu-160 Blackjack', short: 'Tu-160', nick: 'White Swan', variant: 'Tu-160M',
+  role: 'Supersonic strategic bomber', cat: 'Bomber', gen: null, country: 'Soviet Union / Russia', maker: 'Tupolev',
+  first: 1981, intro: 1987, built: '36 (plus new-build Tu-160M)', status: 'In service; new production restarted', crew: 4,
+  paint: '#d9dcdc', paint2: '#b9bdbe',
+  dims: { len: 54.1, span: 55.7, spanSwept: 35.6, height: 13.1, wingArea: 400 },
+  wt: { empty: 110000, mtow: 275000, fuel: 148000 },
+  eng: { n: 4, name: 'Kuznetsov NK-32', type: 'Afterburning turbofan', dry: 137.3, wet: 245.2, bypass: 1.4, sfc: [0.72, 1.7] },
+  sweep: { def: 20, min: 20, max: 65 },
+  perf: { mach: 2.05, vmax: 2220, cruise: 'Mach 0.9', ceil: 16000, radius: 2000, ferry: 12300, g: '+2' },
+  gun: 'None', hard: '2 tandem internal bays, each with a rotary launcher', payload: 45000,
+  fact: 'The largest and heaviest combat aircraft ever built, and the fastest bomber in service. Crews call it the White Swan for its anti-flash white paint.',
+  est: ['radius'],
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [2.5, 0.9, 0.9, 0.85, 0, 2], [6, 1.5, 1.5, 1.4, 0.1, 2.2], [10, 1.8, 1.8, 1.6, 0.2, 2.3], [16, 2.3, 1.9, 1.6, 0.2, 2.6], [24, 3.2, 1.8, 1.8, 0, 3], [32, 3.2, 1.7, 1.8, 0, 3], [40, 2.3, 1.6, 1.5, 0.2, 2.6], [48, 1.3, 1.4, 1.1, 0.5, 2.3], [53, 0.5, 0.8, 0.5, 0.8, 2], [54.1, 0.2, 0.3, 0.2, 0.9, 2]], { capF: 'dark', fine: 1 }),
+    canopy([[5, 0.05, 0.02, 0.02, 1.4], [6, 1.0, 0.5, 0.05, 1.5], [8, 1.3, 0.7, 0.05, 1.7], [10, 0.8, 0.4, 0.03, 1.85], [11, 0.05, 0.05, 0.02, 1.9]], { mat: 'dark' }),
+    surf([[15, 0.5, 2.8, 20, 0.04], [23, 0.5, 9.6, 10.5, 0.07]]),
+    wing('wing', [[24.5, 0.5, 9.6, 7.4, 0.08], [31.14, 0.3, 27.85, 2.3, 0.07]], { pivot: [28, 9.6], sweep: { def: 20 } }),
+    pod([[27, 2.1, 1.1, 1.2, -2.3, 4], [30, 2.2, 1.2, 1.2, -2.2, 3.5], [40, 2.1, 1.1, 1.1, -2.0, 3], [45, 1.95, 1.0, 1.0, -1.9, 2.6]], 3.9, { capF: 'hole' }),
+    { t: 'panel', sec: vfin(40, 1.8, 0, 10, 8.2, 48, 3.5, 0, 0.07) },
+    surf(trap(46, 4.8, 0.4, 6.5, 6.6, 45, 2.2, 0, 0.06)),
+    ...[2.95, 4.95].map(z => noz({ s: 46.0, z, y: -1.9, r: 0.7, len: 1.2, mirror: true })),
+  ],
+  stations: [
+    { id: 'Fwd', label: 'Forward bay', at: [22, 0.2, 0], kind: 'bay', max: 22500, bay: { len: 11.3, w: 1.92, h: 2.2, arr: 'rotary' } },
+    { id: 'Aft', label: 'Aft bay', at: [34, 0.2, 0], kind: 'bay', max: 22500, bay: { len: 11.3, w: 1.92, h: 2.2, arr: 'rotary' } },
+  ],
+  loadouts: [
+    { name: 'Kh-101', note: 'Twelve conventional cruise missiles, six per bay. Used in Syria and Ukraine.', set: { Fwd: ['Kh-101', 6], Aft: ['Kh-101', 6] } },
+    { name: 'Kh-55SM', note: 'Twelve nuclear cruise missiles.', set: { Fwd: ['Kh-55', 6], Aft: ['Kh-55', 6] } },
+    { name: 'Kh-15', note: 'Twenty-four short-range attack missiles.', set: { Fwd: ['Kh-15', 12], Aft: ['Kh-15', 12] } },
+    { name: 'Free-fall bombs', note: 'FAB-500s in both bays.', set: { Fwd: ['FAB-500', 20], Aft: ['FAB-500', 20] } },
+  ],
+});
+
+A({
+  key: 'tu22m3', name: 'Tu-22M3 Backfire-C', short: 'Tu-22M3', nick: 'Backfire', variant: '',
+  role: 'Supersonic long-range bomber and maritime strike', cat: 'Bomber', gen: null, country: 'Soviet Union / Russia', maker: 'Tupolev',
+  first: 1977, intro: 1983, built: '268 (M3), 497 (all variants)', status: 'In service', crew: 4,
+  paint: '#b5bcbf', paint2: '#98a0a4',
+  dims: { len: 42.46, span: 34.28, spanSwept: 23.3, height: 11.05, wingArea: 183.6 },
+  wt: { empty: 58000, mtow: 126000, fuel: 42000 },
+  eng: { n: 2, name: 'Kuznetsov NK-25', type: 'Afterburning turbofan (three-spool)', dry: 147, wet: 245.2, bypass: 1.45, sfc: [0.76, 2.08] },
+  sweep: { def: 20, min: 20, max: 65 },
+  perf: { mach: 1.88, vmax: 2000, cruise: '900 km/h', ceil: 13300, radius: 2410, ferry: 6800, g: '+2' },
+  gun: 'GSh-23 23 mm twin barrel in the tail, remote controlled', hard: 'Internal bay, semi-recessed belly station, 2 wing-glove pylons, 4 external bomb racks', payload: 24000,
+  fact: 'Built to sink aircraft carriers with the Kh-22, a 6 t rocket that climbs to about 27 km and dives at Mach 4.6. Its long-range refuelling probe was removed under arms control treaties.',
+  est: ['fuel', 'eng'],
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [2.5, 0.85, 0.85, 0.8, 0, 2], [5.5, 1.25, 1.35, 1.15, 0.1, 2.2], [8.5, 1.4, 1.45, 1.3, 0.15, 2.3], [14, 1.45, 1.4, 1.4, 0, 2.5], [22, 1.5, 1.4, 1.4, 0, 2.6], [30, 1.3, 1.4, 1.3, 0.1, 2.5], [37, 1.0, 1.3, 1.0, 0.4, 2.3], [41, 0.6, 0.9, 0.5, 0.7, 2], [42.46, 0.25, 0.35, 0.25, 0.9, 2]], { capF: 'dark', fine: 1 }),
+    canopy([[4, 0.05, 0.02, 0.02, 1.2], [5, 0.9, 0.5, 0.05, 1.3], [7.5, 1.1, 0.6, 0.05, 1.45], [9.5, 0.6, 0.3, 0.03, 1.55], [10.2, 0.05, 0.05, 0.02, 1.58]], { mat: 'dark' }),
+    pod([[12, 0.85, 1.35, 1.35, -0.2, 4], [15, 1.0, 1.4, 1.4, -0.2, 3.5], [30, 1.05, 1.3, 1.3, -0.1, 3], [38.5, 0.85, 0.9, 0.9, 0, 2.5]], 1.9, { capF: 'hole' }),
+    surf([[14, 0.9, 2.9, 12.5, 0.05], [19.5, 0.9, 7.4, 7.5, 0.07]]),
+    wing('wing', [[20.5, 0.9, 7.4, 6.2, 0.08], [24.05, 0.8, 17.14, 2.2, 0.07]], { pivot: [23.5, 7.4], sweep: { def: 20 } }),
+    { t: 'panel', sec: vfin(31, 1.4, 0, 9.5, 7.2, 50, 2.8, 0, 0.07) },
+    surf(trap(34.5, 0.6, 1.0, 5.8, 7.6, 45, 1.8, 0, 0.06)),
+    noz({ s: 39.3, z: 1.9, y: 0, r: 0.72, len: 1.2, mirror: true }),
+  ],
+  stations: [
+    { id: 'Belly', label: 'Belly (semi-recessed)', at: [22, -1.3, 0], kind: 'semi', max: 6000 },
+    { id: 'Glove', label: 'Wing glove pylon', at: [20.5, 0.4, 5.4], mirror: true, max: 6000, drop: 0.5 },
+    { id: 'Bay', label: 'Internal bay', at: [22, 0.3, 0], kind: 'bay', max: 12000, bay: { len: 7.0, w: 1.8, h: 1.8, arr: 'rotary' } },
+  ],
+  loadouts: [
+    { name: 'Anti-carrier', note: 'Three Kh-22s: one under the belly, one under each glove.', set: { Belly: 'Kh-22', Glove: 'Kh-22' } },
+    { name: 'Single Kh-22', note: 'The usual operational load, keeping range.', set: { Belly: 'Kh-22' } },
+    { name: 'Free-fall bombs', note: 'FAB-250s in the bay.', set: { Bay: ['FAB-250', 24] } },
+    { name: 'Kh-15', note: 'Six short-range missiles on the rotary launcher.', set: { Bay: ['Kh-15', 6] } },
+  ],
+});
+
+A({
+  key: 'tu95', name: 'Tu-95MS Bear-H', short: 'Tu-95MS', nick: 'Bear', variant: 'Tu-95MSM',
+  role: 'Turboprop strategic bomber and missile carrier', cat: 'Bomber', gen: null, country: 'Soviet Union / Russia', maker: 'Tupolev',
+  first: 1952, intro: 1956, built: '500+ (all variants)', status: 'In service', crew: 7,
+  paint: '#c9cdcf', paint2: '#aeb3b6',
+  dims: { len: 46.2, span: 50.1, height: 12.12, wingArea: 310 },
+  wt: { empty: 90000, mtow: 188000, fuel: 80000 },
+  eng: { n: 4, name: 'Kuznetsov NK-12MP', type: 'turboprop', kw: 11033, dry: 88, props: 'Contra-rotating AV-60N, 5.6 m, 4 + 4 blades', sfc: [0.45, 0.45] },
+  perf: { mach: 0.82, vmax: 925, cruise: '710 km/h', ceil: 13716, radius: 6500, ferry: 15000, g: '+2' },
+  gun: '2 × GSh-23 23 mm in the tail', hard: 'Internal rotary launcher, 4 underwing pylons', payload: 15000,
+  fact: 'The only propeller-driven strategic bomber still in service. The blade tips of its contra-rotating propellers pass the speed of sound, which makes it one of the loudest aircraft ever built.',
+  est: ['fuel', 'eng', 'radius'],
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [2, 1.0, 1.0, 1.0, 0, 2], [5, 1.45, 1.5, 1.45, 0.1, 2], [9, 1.5, 1.55, 1.5, 0.1, 2], [30, 1.5, 1.55, 1.5, 0.1, 2], [38, 1.3, 1.4, 1.2, 0.3, 2], [44, 0.8, 1.0, 0.7, 0.6, 2], [46.2, 0.4, 0.5, 0.4, 0.8, 2]], { capF: 'dark', fine: 1 }),
+    canopy([[3.6, 0.05, 0.02, 0.02, 1.2], [4.6, 0.9, 0.45, 0.05, 1.35], [6.4, 1.1, 0.55, 0.05, 1.5], [8, 0.5, 0.25, 0.03, 1.6], [8.6, 0.05, 0.05, 0.02, 1.62]], { mat: 'dark' }),
+    wing('wing', trap(16.5, 0.2, 1.5, 8.0, 25.05, 37, 2.8, -2, 0.12, 0.09)),
+    pod([[18.8, 0.55, 0.55, 0.55, -0.4, 2], [19.8, 0.95, 1.0, 0.95, -0.4, 2], [23, 0.95, 1.0, 0.95, -0.4, 2], [29, 0.7, 0.8, 0.7, -0.2, 2], [31, 0.2, 0.2, 0.2, -0.1, 2]], 7.6),
+    pod([[23.7, 0.5, 0.5, 0.5, -0.65, 2], [24.7, 0.9, 0.95, 0.9, -0.65, 2], [28, 0.85, 0.9, 0.85, -0.65, 2], [30.5, 0.3, 0.3, 0.3, -0.5, 2]], 14.7),
+    { t: 'prop', s: 16.6, y: -0.4, z: 7.6, r: 2.8, blades: 4, contra: true, mirror: true },
+    { t: 'prop', s: 21.5, y: -0.65, z: 14.7, r: 2.8, blades: 4, contra: true, mirror: true },
+    { t: 'panel', sec: vfin(36.5, 1.5, 0, 8.5, 7.0, 45, 3.2, 0, 0.08) },
+    surf(trap(38.5, 1.0, 1.0, 5.5, 7.4, 40, 2.3, 0, 0.07)),
+  ],
+  stations: [
+    { id: 'Bay', label: 'Rotary launcher', at: [24.5, 0.4, 0], kind: 'bay', max: 7200, bay: { len: 7.0, w: 2.2, h: 2.2, arr: 'rotary' } },
+    { id: 'P-in', label: 'Inboard pylon', on: 'wing', f: 0.11, c: 0.3, mirror: true, max: 4000, drop: 0.7 },
+    { id: 'P-out', label: 'Pylon between engines', on: 'wing', f: 0.4, c: 0.3, mirror: true, max: 4000, drop: 0.7 },
+  ],
+  loadouts: [
+    { name: 'Tu-95MS6', note: 'Six Kh-55 cruise missiles on the internal rotary launcher.', set: { Bay: ['Kh-55', 6] } },
+    { name: 'Tu-95MS16', note: 'Sixteen Kh-55s: six inside, ten under the wings.', set: { Bay: ['Kh-55', 6], 'P-in': ['Kh-55', 3], 'P-out': ['Kh-55', 2] } },
+    { name: 'Kh-101 (MSM)', note: 'Eight Kh-101s under the wings of the modernised Bear.', set: { 'P-in': ['Kh-101', 2], 'P-out': ['Kh-101', 2] } },
+  ],
+});
+
+A({
+  key: 'vulcan', name: 'Avro Vulcan B.2', short: 'Vulcan B.2', nick: 'Tin Triangle', variant: '',
+  role: 'Strategic bomber', cat: 'Bomber', gen: null, country: 'United Kingdom', maker: 'Avro',
+  first: 1952, intro: 1956, built: '136 (89 B.2)', status: 'Retired 1984; XH558 flew displays until 2015', crew: 5,
+  paint: '#7f8a7a', paint2: '#5f6b5d',
+  dims: { len: 30.45, span: 33.83, height: 8.0, wingArea: 368.3 },
+  wt: { empty: 37144, mtow: 92534, fuel: 33600 },
+  eng: { n: 4, name: 'Bristol Siddeley Olympus 301', type: 'Turbojet', dry: 89, bypass: 0, sfc: [0.82, 0.82] },
+  perf: { mach: 0.96, vmax: 1038, cruise: 'Mach 0.86', ceil: 17000, radius: 2800, ferry: 4171, g: '+3' },
+  gun: 'None', hard: 'Internal bomb bay, semi-recessed Blue Steel station', payload: 9500,
+  fact: 'A giant delta that could roll like a fighter. In 1982 the Black Buck raids flew Vulcans 6,300 km from Ascension Island to bomb the runway at Port Stanley, then the longest bombing missions in history.',
+  est: ['fuel', 'radius'],
+  geo: [
+    fus([[0, 0.05, 0.05, 0.05, 0, 2], [2, 0.85, 0.8, 0.75, 0, 2], [4.5, 1.25, 1.3, 1.1, 0.1, 2.2], [8, 1.4, 1.4, 1.2, 0.1, 2.3], [14, 1.4, 1.1, 1.2, 0, 2.5], [22, 1.2, 0.9, 1.0, 0, 2.5], [28, 0.8, 0.7, 0.7, 0.1, 2.2], [30.45, 0.3, 0.3, 0.3, 0.2, 2]], { capF: 'dark', fine: 0.8 }),
+    canopy([[4, 0.05, 0.02, 0.02, 1.2], [5, 0.7, 0.45, 0.05, 1.3], [6.8, 0.8, 0.5, 0.05, 1.4], [8.2, 0.4, 0.25, 0.03, 1.42], [8.8, 0.05, 0.05, 0.02, 1.42]], { mat: 'dark' }),
+    wing('wing', [[8.5, 0, 1.3, 20, 0.1], [14.1, 0, 6, 14.4, 0.09], [19.5, -0.05, 12, 9.0, 0.08], [23.9, -0.2, 16.9, 3.2, 0.06]]),
+    pod([[9.8, 1.1, 0.55, 0.55, 0, 4], [11, 1.15, 0.6, 0.6, 0, 4], [14, 1.0, 0.5, 0.5, 0, 3]], 2.6, { capF: 'hole' }),
+    { t: 'panel', sec: vfin(20.5, 1.0, 0, 9.5, 6.8, 45, 2.2, 0, 0.08) },
+    ...[1.95, 3.25].map(z => noz({ s: 29.2, z, y: 0, r: 0.5, len: 1.0, mirror: true })),
+  ],
+  stations: [
+    { id: 'Bay', label: 'Bomb bay', at: [16, 0.2, 0], kind: 'bay', max: 9500, bay: { len: 8.5, w: 1.8, h: 1.6 } },
+    { id: 'Belly', label: 'Blue Steel recess', at: [16, -1.15, 0], kind: 'semi', max: 7700 },
+  ],
+  loadouts: [
+    { name: 'Black Buck', note: 'Twenty-one 1,000 lb bombs, the 1982 Falklands raid load.', set: { Bay: ['1000 lb MC', 21] } },
+    { name: 'Blue Steel', note: 'A stand-off nuclear missile, half buried in the belly.', set: { Belly: 'Blue Steel' } },
+  ],
+});
+
+// ---- 40-render.js
+// CPU renderer: rasterises the mesh into a sub-cell buffer (2 x 4 samples per character cell),
+// then picks one ASCII glyph per cell whose shape best matches the 8 samples.
+// No DOM here, so node tests can render the same frames to text.
+
+const SX = 2, SY = 4;               // samples per cell (cells are twice as tall as wide, so samples are square)
+const GLOW_RAMP = ' .,:;+*';
+
+class Renderer {
+  constructor(cols, rows) {
+    this.match = defaultMatcher();
+    this.resize(cols, rows);
+    this.scene = null;
+  }
+  resize(cols, rows) {
+    this.cols = cols; this.rows = rows;
+    const W = this.W = cols * SX, H = this.H = rows * SY, n = W * H;
+    this.z = new Float32Array(n); this.lum = new Float32Array(n); this.spec = new Float32Array(n);
+    this.cr = new Float32Array(n); this.cg = new Float32Array(n); this.cb = new Float32Array(n);
+    this.er = new Float32Array(n); this.eg = new Float32Array(n); this.eb = new Float32Array(n);
+    this.tag = new Uint16Array(n);
+    const c = cols * rows;
+    this.chars = new Uint8Array(c); this.col = new Uint8Array(c * 3); this.cellTag = new Uint16Array(c);
+    this.gr = new Float32Array(c); this.gg = new Float32Array(c); this.gb = new Float32Array(c); this.tmp = new Float32Array(c);
+  }
+
+  setScene(scene, ac) {
+    const m = scene.mesh;
+    this.scene = scene; this.ac = ac;
+    this.paint = hex2rgb(ac.paint || '#9aa3aa');
+    this.paint2 = hex2rgb(ac.paint2 || ac.paint || '#7d8790');
+    // per-triangle face normal, and whether each vertex normal agrees with it
+    const FN = new Float32Array(m.nt * 3), VS = new Int8Array(m.nt * 3);
+    for (let i = 0; i < m.nt; i++) {
+      const a = m.T[i * 3] * 3, b = m.T[i * 3 + 1] * 3, c = m.T[i * 3 + 2] * 3, V = m.V;
+      const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2];
+      const vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+      FN[i * 3] = nx; FN[i * 3 + 1] = ny; FN[i * 3 + 2] = nz;
+      for (let k = 0; k < 3; k++) {
+        const v = m.T[i * 3 + k] * 3;
+        VS[i * 3 + k] = m.N[v] * nx + m.N[v + 1] * ny + m.N[v + 2] * nz >= 0 ? 1 : -1;
+      }
+    }
+    this.FN = FN; this.VS = VS;
+    const nv = m.nv;
+    this.px = new Float32Array(nv); this.py = new Float32Array(nv); this.pz = new Float32Array(nv);
+    this.dp = new Float32Array(nv); this.dm = new Float32Array(nv); this.sp = new Float32Array(nv); this.sm = new Float32Array(nv);
+    this.matCol = MAT_KEYS.map(k => k === 'skin' || k === 'door' ? this.paint : k === 'skin2' ? this.paint2 : MATS[k].c);
+    this.matSp = MAT_KEYS.map(k => MATS[k].sp);
+    this.shadow = buildShadow(m);
+  }
+
+  // cam: {eye, f, r, u, foc, cx, cy}; o: {throttle, time, ground, spin}
+  render(cam, o) {
+    const { W, H } = this, n = W * H, m = this.scene.mesh;
+    this.z.fill(Infinity); this.lum.fill(0); this.spec.fill(0); this.tag.fill(0);
+    this.cr.fill(0); this.cg.fill(0); this.cb.fill(0); this.er.fill(0); this.eg.fill(0); this.eb.fill(0);
+    const { eye, f, r, u, foc, cx, cy } = cam;
+
+    // Lights follow the camera (key from upper left, fill from lower right) so every angle reads.
+    const nrm = v => { const l = Math.hypot(...v); return v.map(x => x / l); };
+    const Lk = nrm([-f[0] * 0.35 - r[0] * 0.55, 0.9 - f[1] * 0.35 - r[1] * 0.55, -f[2] * 0.35 - r[2] * 0.55]);
+    const Lf = nrm([-f[0] * 0.4 - u[0] * 0.3 + r[0] * 0.8, -f[1] * 0.4 - u[1] * 0.3 + r[1] * 0.8, -f[2] * 0.4 - u[2] * 0.3 + r[2] * 0.8]);
+    const Hh = nrm([Lk[0] - f[0], Lk[1] - f[1], Lk[2] - f[2]]);
+
+    // Vertex pass: project, light both faces.
+    const V = m.V, N = m.N, { px, py, pz, dp, dm, sp, sm } = this;
+    for (let i = 0, j = 0; i < m.nv; i++, j += 3) {
+      const x = V[j] - eye[0], y = V[j + 1] - eye[1], z = V[j + 2] - eye[2];
+      const vz = x * f[0] + y * f[1] + z * f[2];
+      pz[i] = vz;
+      const iz = foc / Math.max(vz, 0.01);
+      px[i] = cx + (x * r[0] + y * r[1] + z * r[2]) * iz;
+      py[i] = cy - (x * u[0] + y * u[1] + z * u[2]) * iz;
+      const nx = N[j], ny = N[j + 1], nz = N[j + 2];
+      const k = nx * Lk[0] + ny * Lk[1] + nz * Lk[2], fl = nx * Lf[0] + ny * Lf[1] + nz * Lf[2];
+      const h = nx * Hh[0] + ny * Hh[1] + nz * Hh[2], sky = ny * 0.5 + 0.5;
+      const hl = -(nx * f[0] + ny * f[1] + nz * f[2]);   // faint headlight so faces toward the camera never go black
+      dp[i] = 0.07 + 0.66 * Math.max(0, k) ** 1.3 + 0.14 * Math.max(0, fl) + 0.08 * sky + 0.3 * Math.max(0, hl);
+      dm[i] = 0.07 + 0.66 * Math.max(0, -k) ** 1.3 + 0.14 * Math.max(0, -fl) + 0.08 * (1 - sky) + 0.3 * Math.max(0, -hl);
+      sp[i] = h > 0 ? h ** 24 : 0; sm[i] = h < 0 ? (-h) ** 24 : 0;
+    }
+
+    const T = m.T, M = m.M, G = m.G, FN = this.FN, VS = this.VS, Z = this.z, LU = this.lum, SP = this.spec, TG = this.tag;
+    const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
+    const glowMat = MAT_ID.burner, heat = burnerColor(this.ac, o.throttle);
+    const spinning = o.spin;
+    for (let t = 0; t < m.nt; t++) {
+      if (spinning && G[t] === 0xffff) continue;
+      const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2];
+      if (pz[a] < 0.2 || pz[b] < 0.2 || pz[c] < 0.2) continue;
+      const ax = px[a], ay = py[a], bx = px[b], by = py[b], qx = px[c], qy = py[c];
+      const area = (bx - ax) * (qy - ay) - (by - ay) * (qx - ax);
+      if (Math.abs(area) < 1e-9) continue;
+      let x0 = Math.max(0, Math.floor(Math.min(ax, bx, qx))), x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, qx)));
+      let y0 = Math.max(0, Math.floor(Math.min(ay, by, qy))), y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, qy)));
+      if (x0 > x1 || y0 > y1) continue;
+      // which face we see: face normal against the direction to the camera
+      const vx = V[a * 3] - eye[0], vy = V[a * 3 + 1] - eye[1], vz = V[a * 3 + 2] - eye[2];
+      const sf = FN[t * 3] * vx + FN[t * 3 + 1] * vy + FN[t * 3 + 2] * vz < 0 ? 1 : -1;
+      const la = VS[t * 3] * sf > 0 ? dp[a] : dm[a], lb = VS[t * 3 + 1] * sf > 0 ? dp[b] : dm[b], lc = VS[t * 3 + 2] * sf > 0 ? dp[c] : dm[c];
+      const sa = VS[t * 3] * sf > 0 ? sp[a] : sm[a], sb = VS[t * 3 + 1] * sf > 0 ? sp[b] : sm[b], sc = VS[t * 3 + 2] * sf > 0 ? sp[c] : sm[c];
+      const mi = M[t], col = this.matCol[mi], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t];
+      const ia = 1 / area;
+      for (let y = y0; y <= y1; y++) {
+        const sy = y + 0.5;
+        for (let x = x0; x <= x1; x++) {
+          const sx = x + 0.5;
+          const w0 = ((bx - sx) * (qy - sy) - (by - sy) * (qx - sx)) * ia;
+          const w1 = ((qx - sx) * (ay - sy) - (qy - sy) * (ax - sx)) * ia;
+          const w2 = 1 - w0 - w1;
+          if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+          const zz = w0 * pz[a] + w1 * pz[b] + w2 * pz[c], k = y * W + x;
+          if (zz >= Z[k]) continue;
+          Z[k] = zz; TG[k] = tg;
+          if (glow) {
+            LU[k] = heat[3]; SP[k] = 0; CR[k] = heat[0]; CG[k] = heat[1]; CB[k] = heat[2];
+            ER[k] = heat[0] * heat[3]; EG[k] = heat[1] * heat[3]; EB[k] = heat[2] * heat[3];
+          } else {
+            LU[k] = w0 * la + w1 * lb + w2 * lc; SP[k] = (w0 * sa + w1 * sb + w2 * sc) * ms;
+            CR[k] = col[0]; CG[k] = col[1]; CB[k] = col[2];
+            ER[k] = 0; EG[k] = 0; EB[k] = 0;
+          }
+        }
+      }
+    }
+
+    // Ink lines where depth jumps (a wing edge over the fuselage), so shapes separate.
+    for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++) {
+      const k = y * W + x, z0 = Z[k];
+      if (z0 === Infinity) continue;
+      for (let qq = 0; qq < 2; qq++) {
+        const q = qq ? k + W : k + 1, z1 = Z[q];
+        if (z1 === Infinity) continue;
+        if (Math.abs(z1 - z0) > 0.25 + 0.012 * z0) { const far = z1 > z0 ? q : k; LU[far] *= 0.3; SP[far] *= 0.3; }
+      }
+    }
+
+    if (this.scene.props.length && spinning) propDiscs(this, cam, o.time);
+    if (this.scene.exhausts.length) plume(this, cam, o);
+    if (o.ground) ground(this, cam, o);
+    this.resolve();
+  }
+
+  // Samples -> glyph, colour and tag per cell, plus a soft glow around bright emission.
+  resolve() {
+    const { cols, rows, W } = this, LU = this.lum, SP = this.spec, TG = this.tag;
+    const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
+    const chars = this.chars, col = this.col, gr = this.gr, gg = this.gg, gb = this.gb;
+    for (let cyy = 0, c = 0; cyy < rows; cyy++) for (let cxx = 0; cxx < cols; cxx++, c++) {
+      let key = 0, pow = 1, lr = 0, lg = 0, lb = 0, cov = 0, er = 0, eg = 0, eb = 0, tg = 0, sl = 0;
+      for (let j = 0; j < SY; j++) for (let i = 0; i < SX; i++) {
+        const k = (cyy * SY + j) * W + cxx * SX + i;
+        const e = ER[k] + EG[k] + EB[k];
+        const v = LU[k] + SP[k] + e * 0.6;
+        key += (v < 0.08 ? 0 : v < 0.36 ? 1 : v < 0.7 ? 2 : 3) * pow; pow *= 4;
+        if (LU[k] > 0 || SP[k] > 0) {
+          const l = LU[k] * 0.55 + 0.45, s = SP[k];
+          lr += CR[k] * l + s; lg += CG[k] * l + s; lb += CB[k] * l + s; cov++; sl += LU[k];
+        }
+        er += ER[k]; eg += EG[k]; eb += EB[k];
+        if (TG[k]) tg = TG[k];
+      }
+      this.cellTag[c] = tg;
+      gr[c] = er / 8; gg[c] = eg / 8; gb[c] = eb / 8;
+      chars[c] = key ? this.match(key) : 32;
+      const w = cov ? 1 / cov : 0, ee = 1 / 8;
+      col[c * 3] = Math.min(255, (lr * w + er * ee * 1.4) * 255);
+      col[c * 3 + 1] = Math.min(255, (lg * w + eg * ee * 1.4) * 255);
+      col[c * 3 + 2] = Math.min(255, (lb * w + eb * ee * 1.4) * 255);
+    }
+    // glow: blur emission over a few cells, light up empty cells around the flame
+    blur(gr, this.tmp, cols, rows, 3); blur(gg, this.tmp, cols, rows, 3); blur(gb, this.tmp, cols, rows, 3);
+    for (let c = 0; c < cols * rows; c++) {
+      const g = gr[c] + gg[c] + gb[c];
+      if (g < 0.02) continue;
+      if (chars[c] === 32) {
+        const idx = Math.min(GLOW_RAMP.length - 1, Math.floor(g * 7));
+        if (idx > 0) {
+          chars[c] = GLOW_RAMP.charCodeAt(idx);
+          const s = 255 / Math.max(gr[c], gg[c], gb[c]) * Math.min(1, 0.35 + g);
+          col[c * 3] = gr[c] * s; col[c * 3 + 1] = gg[c] * s; col[c * 3 + 2] = gb[c] * s;
+        }
+      } else {
+        col[c * 3] = Math.min(255, col[c * 3] + gr[c] * 120); col[c * 3 + 1] = Math.min(255, col[c * 3 + 1] + gg[c] * 120); col[c * 3 + 2] = Math.min(255, col[c * 3 + 2] + gb[c] * 120);
+      }
+    }
+  }
+
+  // Plain text of the current frame (tests, photo mode copy).
+  text() {
+    let s = '';
+    for (let y = 0; y < this.rows; y++) {
+      s += String.fromCharCode(...this.chars.subarray(y * this.cols, (y + 1) * this.cols)).replace(/\s+$/, '') + '\n';
+    }
+    return s;
+  }
+}
+
+function blur(a, tmp, w, h, r) {
+  for (let y = 0; y < h; y++) {
+    let acc = 0;
+    for (let x = -r; x < w; x++) {
+      if (x + r < w) acc += a[y * w + x + r];
+      if (x - r - 1 >= 0) acc -= a[y * w + x - r - 1];
+      if (x >= 0) tmp[y * w + x] = acc / (2 * r + 1);
+    }
+  }
+  const ry = Math.max(1, r >> 1);
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -ry; y < h; y++) {
+      if (y + ry < h) acc += tmp[(y + ry) * w + x];
+      if (y - ry - 1 >= 0) acc -= tmp[(y - ry - 1) * w + x];
+      if (y >= 0) a[y * w + x] = acc / (2 * ry + 1);
+    }
+  }
+}
+
+// Fallback glyph matcher: density ramp with a little shape awareness (used in node).
+function defaultMatcher() {
+  const ramp = " .:-=+*#%@";
+  return key => {
+    let s = 0, top = 0, bot = 0;
+    for (let i = 0; i < 8; i++) { const q = (key >> (i * 2)) & 3; s += q; if (i < 4) top += q; else bot += q; }
+    if (s <= 2 && bot > 0 && top === 0) return 95; // _
+    if (s <= 2 && top > 0 && bot === 0) return 39; // '
+    return ramp.charCodeAt(Math.min(ramp.length - 1, Math.round(s / 24 * (ramp.length - 1))));
+  };
+}
+
+// Colour and brightness of the burner face: dull red at high dry power, white-orange in reheat.
+function burnerColor(ac, thr) {
+  const ab = !!ac.eng.wet, mil = ab ? MIL : 1;
+  if (ac.eng.type === 'turboprop') return [0.3, 0.1, 0.05, 0.1];
+  if (thr <= mil) { const u = thr / mil; return [0.9, 0.25, 0.08, 0.08 + 0.35 * u * u]; }
+  const u = (thr - mil) / (1 - mil);
+  return [1, lerp(0.55, 0.8, u), lerp(0.25, 0.55, u), 0.9 + 0.5 * u];
+}
+
+// Top-down coverage map for the ground shadow (sun overhead).
+function buildShadow(m) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let i = 0; i < m.V.length; i += 3) { x0 = Math.min(x0, m.V[i]); x1 = Math.max(x1, m.V[i]); z0 = Math.min(z0, m.V[i + 2]); z1 = Math.max(z1, m.V[i + 2]); }
+  const res = Math.max(0.08, Math.max(x1 - x0, z1 - z0) / 400);
+  const w = Math.ceil((x1 - x0) / res) + 2, h = Math.ceil((z1 - z0) / res) + 2, a = new Uint8Array(w * h);
+  for (let t = 0; t < m.nt; t++) {
+    if (m.G[t] === 0xffff) continue;
+    const p = [0, 1, 2].map(k => { const v = m.T[t * 3 + k] * 3; return [(m.V[v] - x0) / res, (m.V[v + 2] - z0) / res]; });
+    const bx0 = Math.max(0, Math.floor(Math.min(p[0][0], p[1][0], p[2][0]))), bx1 = Math.min(w - 1, Math.ceil(Math.max(p[0][0], p[1][0], p[2][0])));
+    const by0 = Math.max(0, Math.floor(Math.min(p[0][1], p[1][1], p[2][1]))), by1 = Math.min(h - 1, Math.ceil(Math.max(p[0][1], p[1][1], p[2][1])));
+    const ar = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
+    if (Math.abs(ar) < 1e-9) continue;
+    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+      const sx = x + 0.5, sy = y + 0.5;
+      const w0 = ((p[1][0] - sx) * (p[2][1] - sy) - (p[1][1] - sy) * (p[2][0] - sx)) / ar;
+      const w1 = ((p[2][0] - sx) * (p[0][1] - sy) - (p[2][1] - sy) * (p[0][0] - sx)) / ar;
+      if (w0 >= -0.01 && w1 >= -0.01 && 1 - w0 - w1 >= -0.01) a[y * w + x] = 1;
+    }
+  }
+  return { x0, z0, res, w, h, a };
+}
+
+// Ground plane: a surveyed grid of dots and lines, the aircraft's shadow, and afterburner light on the floor.
+function ground(R, cam, o) {
+  const { W, H, z: Z } = R, { eye, f, r, u, foc, cx, cy } = cam, gy = o.groundY, sh = R.shadow;
+  const lights = o.floorLights || [];
+  for (let y = 0; y < H; y++) {
+    const vy = -(y + 0.5 - cy) / foc;
+    for (let x = 0; x < W; x++) {
+      const k = y * W + x;
+      if (Z[k] !== Infinity) continue;
+      const vx = (x + 0.5 - cx) / foc;
+      const dx = f[0] + r[0] * vx + u[0] * vy, dy = f[1] + r[1] * vx + u[1] * vy, dz = f[2] + r[2] * vx + u[2] * vy;
+      if (dy >= -1e-4) continue;
+      const t = (gy - eye[1]) / dy;
+      const gx = eye[0] + dx * t, gz = eye[2] + dz * t;
+      const dist = Math.hypot(gx, gz), fade = 1 - smooth(o.groundR * 0.5, o.groundR, dist);
+      if (fade <= 0) continue;
+      const pw = t / foc * 1.2;                         // sample footprint on the ground
+      const st = o.groundStep || 2, ST = st * 5;
+      const lx = Math.abs(gx - Math.round(gx / st) * st), lz = Math.abs(gz - Math.round(gz / st) * st);
+      const Lx = Math.abs(gx - Math.round(gx / ST) * ST), Lz = Math.abs(gz - Math.round(gz / ST) * ST);
+      let v = 0;
+      if (lx < pw * 0.6 && lz < pw * 0.6) v = 0.4;      // grid dots every step (2 m, or 5 m for bombers)
+      if (Lx < pw * 0.5 || Lz < pw * 0.5) v = Math.max(v, 0.26); // lines every 5 steps
+      const sxx = Math.floor((gx - sh.x0) / sh.res), szz = Math.floor((gz - sh.z0) / sh.res);
+      const shade = sxx >= 0 && szz >= 0 && sxx < sh.w && szz < sh.h && sh.a[szz * sh.w + sxx];
+      if (shade) v = 0;
+      let er = 0, eg = 0, eb = 0;
+      for (const L of lights) {
+        const d2 = (gx - L.x) ** 2 + (gz - L.z) ** 2, w = L.i / (1 + d2 / (L.r * L.r));
+        er += w * L.c[0]; eg += w * L.c[1]; eb += w * L.c[2];
+      }
+      v *= fade;
+      if (shade) { er *= 0.3; eg *= 0.3; eb *= 0.3; }
+      R.lum[k] = v; R.cr[k] = 0.42; R.cg[k] = 0.5; R.cb[k] = 0.55;
+      if (er + eg + eb > 0.01) {
+        R.lum[k] = Math.max(v, Math.min(0.45, (er + eg + eb) * 0.6) * fade);
+        R.cr[k] = lerp(R.cr[k], er / (er + eg + eb + 1e-6) * 2, Math.min(1, er * 2));
+        R.cg[k] = lerp(R.cg[k], eg / (er + eg + eb + 1e-6) * 2, Math.min(1, er * 2));
+        R.cb[k] = lerp(R.cb[k], eb / (er + eg + eb + 1e-6) * 2, Math.min(1, er * 2));
+      }
+    }
+  }
+}
+
+// ---- 42-camera.js
+// Orbit camera. yaw 0 looks at the aircraft from ahead-right; pitch > 0 from above.
+function makeCam({ yaw, pitch, dist, target = [0, 0, 0], W, H, fov = 32, ox = 0, oy = 0 }) {
+  const cp = Math.cos(pitch), eye = [target[0] + dist * cp * Math.cos(yaw), target[1] + dist * Math.sin(pitch), target[2] + dist * cp * Math.sin(yaw)];
+  let f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+  const fl = Math.hypot(...f); f = f.map(x => x / fl);
+  let r = [f[1] * 0 - f[2] * 1, f[2] * 0 - f[0] * 0, f[0] * 1 - f[1] * 0]; // f x up
+  const rl = Math.hypot(...r) || 1; r = r.map(x => x / rl);
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+  const foc = (H / 2) / Math.tan(fov * D2R / 2);
+  return { eye, f, r, u, foc, cx: W / 2 + ox, cy: H / 2 + oy };
+}
+
+// ---- 45-plume.js
+// Afterburner plumes and propeller discs, splatted into the sample buffer as emission.
+
+function splat(R, cam, x, y, z, rad, er, eg, eb, lum) {
+  const { eye, f, r, u, foc, cx, cy } = cam;
+  const dx = x - eye[0], dy = y - eye[1], dz = z - eye[2];
+  const vz = dx * f[0] + dy * f[1] + dz * f[2];
+  if (vz < 0.3) return;
+  const iz = foc / vz, sx = cx + (dx * r[0] + dy * r[1] + dz * r[2]) * iz, sy = cy - (dx * u[0] + dy * u[1] + dz * u[2]) * iz;
+  const s = clamp(Math.round(rad * iz), 1, 3), h = s >> 1;
+  const x0 = Math.floor(sx) - h, y0 = Math.floor(sy) - h, W = R.W, H = R.H, Z = R.z;
+  for (let j = 0; j < s; j++) {
+    const yy = y0 + j; if (yy < 0 || yy >= H) continue;
+    for (let i = 0; i < s; i++) {
+      const xx = x0 + i; if (xx < 0 || xx >= W) continue;
+      const k = yy * W + xx;
+      if (vz > Z[k] + 0.15) continue;
+      if (lum) { if (Z[k] === Infinity || vz < Z[k]) { Z[k] = vz; R.lum[k] = lum; R.spec[k] = 0; R.cr[k] = er; R.cg[k] = eg; R.cb[k] = eb; R.tag[k] = 0; } }
+      else { R.er[k] += er; R.eg[k] += eg; R.eb[k] += eb; }
+    }
+  }
+}
+
+// One plume per exhaust. Length, brightness and shock diamonds grow with the afterburner setting.
+function plume(R, cam, o) {
+  const ac = R.ac, thr = o.throttle, t = o.time, ab = !!ac.eng.wet, mil = ab ? MIL : 1;
+  const ex = R.scene.exhausts, lights = [];
+  o.floorLights = lights;
+  const budget = 7000 / Math.max(2, ex.length);
+  ex.forEach((e, ei) => {
+    const rad = e.r, sy = e.flat ? e.h / rad : 1, sz = e.flat ? e.w / rad : 1;
+    const seed = ei * 1013;
+    if (thr <= mil) {
+      // dry: a faint heat shimmer that grows with power
+      const u = thr / mil;
+      if (u < 0.35) return;
+      const n = Math.floor(260 * u), Lp = rad * (3 + 4 * u), I = 0.05 * (u - 0.3);
+      for (let i = 0; i < n; i++) {
+        const h1 = hash(seed + i), h2 = hash(seed + i * 1.37 + 7), h3 = hash(seed + i * 2.11 + 3);
+        const ph = (h1 + t * 1.6) % 1, d = ph * Lp, rr = rad * (0.9 + 0.5 * ph) * Math.sqrt(h2), a = h3 * 6.2832;
+        const w = I * (1 - ph);
+        splat(R, cam, e.x - d, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.08, w * 1.0, w * 0.55, w * 0.4);
+      }
+      return;
+    }
+    const u = (thr - mil) / (1 - mil), I = 0.45 + 0.55 * u;
+    const Lp = rad * lerp(6, 16, u), sp = rad * 2 * 1.25, nd = Math.round(2 + 4 * u);
+    const n = Math.floor(budget * (0.55 + 0.45 * u)), flick = Math.floor(t * 30);
+    for (let i = 0; i < n; i++) {
+      const h1 = hash(seed + i), h2 = hash(seed + i * 1.37 + 7), h3 = hash(seed + i * 2.11 + 3), h4 = hash(seed + i + flick * 0.618);
+      const ph = (h1 + t * 2.2) % 1, tt = ph ** 0.85, d = tt * Lp;
+      const env = Math.sin(Math.PI * Math.min(1, tt * 1.4 + 0.15)) * (1 - 0.55 * tt * tt);
+      const rmax = rad * (0.95 + 0.35 * env), rr = rmax * Math.sqrt(h2), a = h3 * 6.2832;
+      const core = rr < rmax * 0.45 && tt < 0.3;
+      let c;
+      if (core) c = [0.75, 0.82, 1.0];
+      else if (tt < 0.4) c = [1.0, 0.74, 0.36];
+      else if (tt < 0.7) c = [1.0, 0.47, 0.16];
+      else c = [0.85, 0.24, 0.08];
+      const w = I * 0.16 * (1 - tt) ** 1.1 * (0.6 + 0.4 * (1 - rr / rmax)) * (0.7 + 0.6 * h4);
+      splat(R, cam, e.x - d, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.1, c[0] * w, c[1] * w, c[2] * w);
+    }
+    // Mach diamonds: bright lenses on the axis at regular spacing
+    for (let k = 0; k < nd; k++) {
+      const dk = sp * (k + 0.75), fade = (1 - k / (nd + 1)) * (0.6 + 0.4 * u);
+      for (let i = 0; i < 60; i++) {
+        const h1 = hash(seed + k * 97 + i), h2 = hash(seed + k * 31 + i * 3.3), h3 = hash(seed + i * 5.1 + k + flick * 0.1);
+        const along = (h1 - 0.5) * sp * 0.55, lens = 1 - Math.abs(along) / (sp * 0.28);
+        if (lens <= 0) continue;
+        const rr = rad * 0.5 * lens * Math.sqrt(h2), a = h3 * 6.2832, w = 0.7 * fade * I;
+        splat(R, cam, e.x - dk - along, e.y + Math.cos(a) * rr * sy, e.z + Math.sin(a) * rr * sz, 0.09, w, w * 0.9, w * 0.72);
+      }
+    }
+    lights.push({ x: e.x - Lp * 0.3, z: e.z, r: Lp * 0.22, i: 0.22 * I, c: [1, 0.55, 0.22] });
+  });
+}
+
+// Spinning propellers: a translucent disc with a faint rotating blade blur.
+function propDiscs(R, cam, time) {
+  for (const p of R.scene.props) {
+    const rows = p.contra ? [0.4, -0.4] : [0];
+    rows.forEach((dx, ri) => {
+      const dir = ri ? -1 : 1, rot = time * 9 * dir;
+      for (let i = 0; i < 900; i++) {
+        const h1 = hash(i * 1.3 + ri * 71), h2 = hash(i * 2.7 + 5 + ri * 13);
+        const rr = p.r * (0.12 + 0.88 * Math.sqrt(h1)), a = h2 * 6.2832;
+        const blade = Math.cos((a - rot) * p.blades);
+        const l = 0.1 + 0.18 * Math.max(0, blade) ** 6;
+        splat(R, cam, p.x + dx, p.y + Math.cos(a) * rr, p.z + Math.sin(a) * rr, 0.06, 0.55, 0.57, 0.6, l);
+      }
+    });
+  }
+}
+
+module.exports = { AIRCRAFT, STORES, buildScene, Renderer, perfAt, loadoutMass, makeCam };
