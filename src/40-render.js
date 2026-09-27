@@ -87,6 +87,7 @@ class Renderer {
     const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
     const glowMat = MAT_ID.burner, heat = burnerColor(this.ac, o.throttle);
     const spinning = o.spin;
+    const liv = this.scene.livery, halfL = liv ? this.ac.dims.len / 2 : 0, skinId = MAT_ID.skin, doorId = MAT_ID.door;
     for (let t = 0; t < m.nt; t++) {
       if (spinning && G[t] === 0xffff) continue;
       const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2];
@@ -103,6 +104,9 @@ class Renderer {
       const la = VS[t * 3] * sf > 0 ? dp[a] : dm[a], lb = VS[t * 3 + 1] * sf > 0 ? dp[b] : dm[b], lc = VS[t * 3 + 2] * sf > 0 ? dp[c] : dm[c];
       const sa = VS[t * 3] * sf > 0 ? sp[a] : sm[a], sb = VS[t * 3 + 1] * sf > 0 ? sp[b] : sm[b], sc = VS[t * 3 + 2] * sf > 0 ? sp[c] : sm[c];
       const mi = M[t], cr0 = TC[t * 3], cg0 = TC[t * 3 + 1], cb0 = TC[t * 3 + 2], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t], pid = P[t];
+      // special livery: colour each pixel from its position on the airframe
+      const lrole = liv && G[t] === 0 && (mi === skinId || mi === doorId) ? liv.roles[pid >> 4] : null;
+      const ln = lrole && [FN[t * 3] * sf, FN[t * 3 + 1] * sf, FN[t * 3 + 2] * sf];
       const ia = 1 / area;
       for (let y = y0; y <= y1; y++) {
         const sy = y + 0.5;
@@ -120,7 +124,8 @@ class Renderer {
             ER[k] = heat[0] * heat[3]; EG[k] = heat[1] * heat[3]; EB[k] = heat[2] * heat[3];
           } else {
             LU[k] = w0 * la + w1 * lb + w2 * lc; SP[k] = (w0 * sa + w1 * sb + w2 * sc) * ms;
-            CR[k] = cr0; CG[k] = cg0; CB[k] = cb0;
+            const pc = lrole && liv.paint(lrole, halfL - (w0 * V[a * 3] + w1 * V[b * 3] + w2 * V[c * 3]), w0 * V[a * 3 + 1] + w1 * V[b * 3 + 1] + w2 * V[c * 3 + 1], w0 * V[a * 3 + 2] + w1 * V[b * 3 + 2] + w2 * V[c * 3 + 2], ln);
+            if (pc) { CR[k] = pc[0]; CG[k] = pc[1]; CB[k] = pc[2]; } else { CR[k] = cr0; CG[k] = cg0; CB[k] = cb0; }
             ER[k] = 0; EG[k] = 0; EB[k] = 0;
           }
         }

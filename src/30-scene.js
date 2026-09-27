@@ -63,9 +63,11 @@ function buildScene(ac, o = {}) {
   const load = o.loadout || {};
 
   // Airframe
+  const livRoles = [];   // mesh part -> livery role
   for (const p of ac.geo) {
     for (const zs of p.mirror ? [1, -1] : [1]) {
       M.part();
+      if (p.liv) livRoles[M.comp] = p.liv;
       if (p.t === 'loft') {
         let st = p.st;
         if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
@@ -102,10 +104,18 @@ function buildScene(ac, o = {}) {
         }
         ploft(M, st, { x0: L / 2, z: (p.z || 0) * zs, zs, mat: p.mat, capF: p.capF, capB: p.capB, flat: p.flat, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
+        const flip = s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] });
         let secs = panelSections(p, L, sweep);
-        if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
+        if (zs < 0) secs = secs.map(flip);
         if (p.name && zs > 0) secsByName[p.name] = secs;
         panel(M, secs, { mat: p.mat });
+        // Swung wings: fair the rotated root back to where it sat at the design sweep, closing the
+        // notch that opens at the glove (the trailing half of the fairing tucks under the glove).
+        if (p.pivot && p.sweep && sweep != null && Math.abs(sweep - p.sweep.def) > 0.1) {
+          let r0 = panelSections(p, L, p.sweep.def)[0];
+          if (zs < 0) r0 = flip(r0);
+          panel(M, [r0, secs[0]], { mat: p.mat });
+        }
         panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
@@ -193,7 +203,8 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns };
+  const livery = o.livery && LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns, livery };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {

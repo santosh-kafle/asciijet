@@ -593,9 +593,11 @@ function buildScene(ac, o = {}) {
   const load = o.loadout || {};
 
   // Airframe
+  const livRoles = [];   // mesh part -> livery role
   for (const p of ac.geo) {
     for (const zs of p.mirror ? [1, -1] : [1]) {
       M.part();
+      if (p.liv) livRoles[M.comp] = p.liv;
       if (p.t === 'loft') {
         let st = p.st;
         if (ac.canopyH && (p.mat === 'glass' || p.mat === 'gold')) st = bubbleStations(ac, st, ac.canopyH);
@@ -632,10 +634,18 @@ function buildScene(ac, o = {}) {
         }
         ploft(M, st, { x0: L / 2, z: (p.z || 0) * zs, zs, mat: p.mat, capF: p.capF, capB: p.capB, flat: p.flat, seams: p.fine ? (L > 30 ? 3.5 : 2.2) : 0 });
       } else if (p.t === 'panel') {
+        const flip = s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] });
         let secs = panelSections(p, L, sweep);
-        if (zs < 0) secs = secs.map(s => ({ ...s, le: [s.le[0], s.le[1], -s.le[2]], te: [s.te[0], s.te[1], -s.te[2]] }));
+        if (zs < 0) secs = secs.map(flip);
         if (p.name && zs > 0) secsByName[p.name] = secs;
         panel(M, secs, { mat: p.mat });
+        // Swung wings: fair the rotated root back to where it sat at the design sweep, closing the
+        // notch that opens at the glove (the trailing half of the fairing tucks under the glove).
+        if (p.pivot && p.sweep && sweep != null && Math.abs(sweep - p.sweep.def) > 0.1) {
+          let r0 = panelSections(p, L, p.sweep.def)[0];
+          if (zs < 0) r0 = flip(r0);
+          panel(M, [r0, secs[0]], { mat: p.mat });
+        }
         panels.push({ p, secs, zs });
       } else if (p.t === 'noz') exhausts.push(nozzle(M, p, L, zs));
       else if (p.t === 'prop') props.push(propeller(M, p, L, zs));
@@ -723,7 +733,8 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns };
+  const livery = o.livery && LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
+  return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns, livery };
 }
 
 function pylon(M, x, y, z, h, ch, tag) {
@@ -1103,19 +1114,19 @@ A({
   gun: 'M61A1 Vulcan 20 mm, 510 rounds', hard: '2 wing pylons (with 4 missile rails), 12 conformal tank stations, centreline, 2 pod mounts', payload: 10400,
   fact: 'A two-seat strike version of the air superiority Eagle. Conformal fuel tanks hug the intakes and carry bombs in rows, so the wing pylons stay free for fuel and missiles.',
   geo: [
-    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.45, 0.32, 0.1, 2], [2.8, 0.62, 0.6, 0.48, 0.15, 2], [4.5, 0.72, 0.63, 0.6, 0.15, 2.2], [6.5, 0.8, 0.62, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.6, 0.5, 0.05, 3], [15.5, 1.35, 0.55, 0.5, 0.05, 3], [16.8, 1.35, 0.5, 0.45, 0.05, 3], [17.4, 1.3, 0.45, 0.42, 0.05, 3]], { capF: 'dark' }),
+    fus([[0, 0.03, 0.03, 0.03, 0, 2], [1.2, 0.42, 0.45, 0.32, 0.1, 2], [2.8, 0.62, 0.6, 0.48, 0.15, 2], [4.5, 0.72, 0.63, 0.6, 0.15, 2.2], [6.5, 0.8, 0.62, 0.6, 0.15, 2.3], [9, 1.2, 0.6, 0.55, 0.05, 2.8], [12.5, 1.35, 0.6, 0.5, 0.05, 3], [15.5, 1.35, 0.55, 0.5, 0.05, 3], [16.8, 1.35, 0.5, 0.45, 0.05, 3], [17.4, 1.3, 0.45, 0.42, 0.05, 3]], { capF: 'dark', liv: 'fus' }),
     // tall rectangular intakes beside the cockpit, upper lip leading
-    pod([[5.6, 0.4, 0.6, 0.6, -0.12, 4], [7, 0.42, 0.6, 0.6, -0.12, 4], [10, 0.45, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.12, { box: true, capF: 'hole', rake: { bot: 0.7 } }),
+    pod([[5.6, 0.4, 0.6, 0.6, -0.12, 4], [7, 0.42, 0.6, 0.6, -0.12, 4], [10, 0.45, 0.55, 0.55, -0.1, 3.5], [13, 0.4, 0.45, 0.45, -0.05, 3]], 1.12, { box: true, capF: 'hole', rake: { bot: 0.7 }, liv: 'side' }),
     // conformal fuel tanks along the intake walls
-    pod([[7.5, 0.1, 0.1, 0.1, -0.1, 2], [8.5, 0.36, 0.4, 0.4, -0.1, 2.5], [13, 0.36, 0.4, 0.4, -0.08, 2.5], [14.8, 0.08, 0.1, 0.1, -0.05, 2]], 1.6),
+    pod([[7.5, 0.1, 0.1, 0.1, -0.1, 2], [8.5, 0.36, 0.4, 0.4, -0.1, 2.5], [13, 0.36, 0.4, 0.4, -0.08, 2.5], [14.8, 0.08, 0.1, 0.1, -0.05, 2]], 1.6, { liv: 'side' }),
     // tail booms carrying the fins and stabilators past the nozzles
-    pod([[15.0, 0.22, 0.3, 0.3, 0.1, 2.5], [18.9, 0.12, 0.14, 0.14, 0.1, 2]], 1.62),
+    pod([[15.0, 0.22, 0.3, 0.3, 0.1, 2.5], [18.9, 0.12, 0.14, 0.14, 0.1, 2]], 1.62, { liv: 'boom' }),
     canopy([[3.25, 0.05, 0.02, 0.02, 0.72], [4.0, 0.42, 0.42, 0.05, 0.8], [5.5, 0.48, 0.52, 0.05, 0.86], [7.0, 0.46, 0.5, 0.05, 0.86], [7.9, 0.3, 0.25, 0.05, 0.82], [8.4, 0.08, 0.05, 0.02, 0.8]]),
-    fus([[7.6, 0.45, 0.55, 0.1, 0.78, 2], [10, 0.5, 0.25, 0.1, 0.72, 2.4], [13, 0.35, 0.08, 0.1, 0.7, 2], [14.5, 0.1, 0.03, 0.05, 0.65, 2]], { fine: 0 }),
+    fus([[7.6, 0.45, 0.55, 0.1, 0.78, 2], [10, 0.5, 0.25, 0.1, 0.72, 2.4], [13, 0.35, 0.08, 0.1, 0.7, 2], [14.5, 0.1, 0.03, 0.05, 0.65, 2]], { fine: 0, liv: 'spine' }),
     // 45° wing with the raked tip
-    wing('wing', [[9.3, 0.3, 1.95, 5.9, 0.05], [13.32, 0.25, 5.9, 2.35, 0.045], [14.05, 0.24, 6.6, 0.5, 0.04]]),
-    surf([[16.1, 0.1, 1.85, 2.6, 0.04], [18.5, 0.1, 4.25, 0.9, 0.04]]),
-    surf(vfin(15.8, 0.72, 1.62, 3.2, 2.9, 40, 0.75, 2, 0.045)),
+    wing('wing', [[9.3, 0.3, 1.95, 5.9, 0.05], [13.32, 0.25, 5.9, 2.35, 0.045], [14.05, 0.24, 6.6, 0.5, 0.04]], { liv: 'wing' }),
+    surf([[16.1, 0.1, 1.85, 2.6, 0.04], [18.5, 0.1, 4.25, 0.9, 0.04]], { liv: 'stab' }),
+    surf(vfin(15.8, 0.72, 1.62, 3.2, 2.9, 40, 0.75, 2, 0.045), { liv: 'fin' }),
     noz({ s: 18.0, z: 0.72, r: 0.58, len: 1.3, mirror: true }),
   ],
   stations: [
@@ -2159,6 +2170,58 @@ function fxFor(ac) {
   return (ac._fx = { fam, flame, snd, gun });
 }
 
+// ---- 39-livery.js
+// Special liveries, painted per pixel so stripes and stars stay crisp across big triangles.
+// Geometry entries opt in with `liv: '<role>'`; paint(role, s, y, z, n) gets the pixel's position
+// (s = metres aft of the nose, y up, z starboard) and the face normal, and returns [r, g, b] or null
+// to keep the normal scheme.
+
+// Five-pointed star, point up, outer radius 1 (inner radius 0.38).
+function inStar(u, v) {
+  const r = Math.hypot(u, v);
+  if (r > 1) return false;
+  if (r < 0.38) return true;
+  const seg = Math.PI / 5, a = ((Math.atan2(u, v) % (2 * seg)) + 2 * seg) % (2 * seg);
+  const t = Math.abs(a - seg) / seg;   // 0 at a valley, 1 at a point
+  return r < 0.38 + 0.62 * t;
+}
+// Staggered star field on a plane (like the flag's canton), pitch in metres.
+function starField(a, b, pitch, size) {
+  const row = Math.floor(b / pitch), off = row & 1 ? pitch / 2 : 0;
+  const cu = Math.floor((a - off) / pitch) * pitch + off + pitch / 2, cv = row * pitch + pitch / 2;
+  return inStar((a - cu) / size, (b - cv) / size);
+}
+
+const LIV_RGB = c => hex2rgb(c);
+const LIVERIES = {
+  // F-15E "Stars and Stripes" (heritage jet, 2025): blue forward fuselage with white stars, red and
+  // white stripes running fore and aft on the wings and stabilators, black aft fuselage and fins.
+  f15e: {
+    name: 'Stars and Stripes',
+    paint: (() => {
+      const RED = LIV_RGB('#b3222f'), WHITE = LIV_RGB('#e9e9e6'), BLUE = LIV_RGB('#2b5bbf'), BLACK = LIV_RGB('#1c1e21');
+      const RADOME = LIV_RGB('#4b5157'), UNDER = LIV_RGB('#737a7f');
+      const STRIPE = 0.36, TIP = 6.6;            // 13 stripes root to tip, red at the tip
+      const BLUE_END = 9.3;                       // blue ends at the wing root leading edge
+      const stripes = z => (Math.floor((TIP - Math.abs(z)) / STRIPE) & 1 ? WHITE : RED);
+      const stars = (s, y, z, n) => {
+        // project on the plane the surface faces most: top view for upper skins, side view otherwise
+        const side = Math.abs(n[2]) > Math.abs(n[1]);
+        return starField(s, side ? -y : Math.abs(z), 0.7, 0.25) ? WHITE : BLUE;
+      };
+      return (role, s, y, z, n) => {
+        const down = n[1] < -0.35;
+        if (role === 'wing' || role === 'stab') return down ? UNDER : stripes(z);
+        if (role === 'fin' || role === 'boom') return BLACK;
+        if (down) return UNDER;
+        if (role === 'fus' && s < 2.1) return RADOME;
+        if (role === 'spine') return s > 9.5 && s < 11.4 ? WHITE : BLACK;   // white panel carrying the tail code
+        return s < BLUE_END ? stars(s, y, z, n) : BLACK;
+      };
+    })(),
+  },
+};
+
 // ---- 40-render.js
 // CPU renderer: rasterises the mesh into a sub-cell buffer (2 x 4 samples per character cell),
 // then picks one ASCII glyph per cell whose shape best matches the 8 samples.
@@ -2249,6 +2312,7 @@ class Renderer {
     const CR = this.cr, CG = this.cg, CB = this.cb, ER = this.er, EG = this.eg, EB = this.eb;
     const glowMat = MAT_ID.burner, heat = burnerColor(this.ac, o.throttle);
     const spinning = o.spin;
+    const liv = this.scene.livery, halfL = liv ? this.ac.dims.len / 2 : 0, skinId = MAT_ID.skin, doorId = MAT_ID.door;
     for (let t = 0; t < m.nt; t++) {
       if (spinning && G[t] === 0xffff) continue;
       const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2];
@@ -2265,6 +2329,9 @@ class Renderer {
       const la = VS[t * 3] * sf > 0 ? dp[a] : dm[a], lb = VS[t * 3 + 1] * sf > 0 ? dp[b] : dm[b], lc = VS[t * 3 + 2] * sf > 0 ? dp[c] : dm[c];
       const sa = VS[t * 3] * sf > 0 ? sp[a] : sm[a], sb = VS[t * 3 + 1] * sf > 0 ? sp[b] : sm[b], sc = VS[t * 3 + 2] * sf > 0 ? sp[c] : sm[c];
       const mi = M[t], cr0 = TC[t * 3], cg0 = TC[t * 3 + 1], cb0 = TC[t * 3 + 2], ms = this.matSp[mi], glow = mi === glowMat, tg = G[t] === 0xffff ? 0 : G[t], pid = P[t];
+      // special livery: colour each pixel from its position on the airframe
+      const lrole = liv && G[t] === 0 && (mi === skinId || mi === doorId) ? liv.roles[pid >> 4] : null;
+      const ln = lrole && [FN[t * 3] * sf, FN[t * 3 + 1] * sf, FN[t * 3 + 2] * sf];
       const ia = 1 / area;
       for (let y = y0; y <= y1; y++) {
         const sy = y + 0.5;
@@ -2282,7 +2349,8 @@ class Renderer {
             ER[k] = heat[0] * heat[3]; EG[k] = heat[1] * heat[3]; EB[k] = heat[2] * heat[3];
           } else {
             LU[k] = w0 * la + w1 * lb + w2 * lc; SP[k] = (w0 * sa + w1 * sb + w2 * sc) * ms;
-            CR[k] = cr0; CG[k] = cg0; CB[k] = cb0;
+            const pc = lrole && liv.paint(lrole, halfL - (w0 * V[a * 3] + w1 * V[b * 3] + w2 * V[c * 3]), w0 * V[a * 3 + 1] + w1 * V[b * 3 + 1] + w2 * V[c * 3 + 1], w0 * V[a * 3 + 2] + w1 * V[b * 3 + 2] + w2 * V[c * 3 + 2], ln);
+            if (pc) { CR[k] = pc[0]; CG[k] = pc[1]; CB[k] = pc[2]; } else { CR[k] = cr0; CG[k] = cg0; CB[k] = cb0; }
             ER[k] = 0; EG[k] = 0; EB[k] = 0;
           }
         }
