@@ -1,6 +1,6 @@
 {
   "name": "jetatlas",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fighters and bombers drawn entirely in ASCII, with live afterburner and loadouts",
   "license": "MIT",
   "author": "Santosh Kafle",
