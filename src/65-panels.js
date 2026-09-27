@@ -35,7 +35,7 @@ function renderIndex() {
     html += `<li><button data-key="${a.key}" class="${state.ac === a ? 'on' : ''}"><span class="n">${a.short}</span><span class="v">${v}<i>${u}</i></span><span class="m">${a.nick ? a.nick + ' · ' : ''}${a.country} · ${a.first}</span></button></li>`;
   }
   $('#list').innerHTML = html || '<li class="grp">No aircraft match</li>';
-  $$('#list button').forEach(b => b.onclick = () => { selectAircraft(b.dataset.key); $('#index').classList.remove('open'); });
+  $$('#list button').forEach(b => b.onclick = () => { selectAircraft(b.dataset.key); $('#index').classList.remove('open'); $('#menuBtn').setAttribute('aria-expanded', false); });
 }
 
 function renderDossier() {

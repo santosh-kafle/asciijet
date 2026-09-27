@@ -44,6 +44,8 @@ function selectAircraft(key, push = true) {
   if (push) try { history.replaceState(null, '', '#' + ac.key); } catch { }
   rebuild();
   renderIndex(); renderDossier(); renderThrottle(); syncButtons();
+  $('#menuCur').textContent = ac.short || ac.name;
+  $('#menuN').textContent = `${AIRCRAFT.indexOf(ac) + 1} / ${AIRCRAFT.length}`;
   cam.tzoom = 1;
 }
 
@@ -310,7 +312,7 @@ function initControls() {
   addEventListener('keydown', e => {
     if (e.target.matches('input[type=search], select')) { if (e.key === 'Escape') e.target.blur(); return; }
     const k = e.key;
-    if (k === 'Escape') { closeSheet(); $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); state.hl = 0; return; }
+    if (k === 'Escape') { closeSheet(); $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); $('#menuBtn').setAttribute('aria-expanded', false); state.hl = 0; return; }
     if (k === '/') { e.preventDefault(); $('#index').classList.add('open'); $('#q').focus(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = k.toLowerCase();

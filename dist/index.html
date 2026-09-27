@@ -237,7 +237,12 @@ svg text { font-family: var(--mono); }
   body { overflow: auto; }
   #top { position: sticky; background: var(--ground); height: auto; min-height: 52px; padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px; flex-wrap: wrap; gap: 8px 12px; }
   .brand small { display: none; }
-  #menuBtn { display: inline-block; }
+  #menuBtn { display: flex; align-items: center; gap: 8px; order: 3; flex: 1 0 100%; padding: 9px 12px; text-align: left; border-color: var(--muted); color: var(--ink); }
+  #menuBtn .mk { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; }
+  #menuBtn b { font: 600 14px/1 var(--display); letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; }
+  #menuBtn .mn { margin-left: auto; color: var(--muted); font-weight: 500; }
+  #menuBtn .mc { color: var(--amber); font-size: 14px; transition: transform .2s; }
+  #menuBtn[aria-expanded="true"] .mc { transform: rotate(180deg); }
   #helpBtn { display: none; }
   #stage { position: relative; height: 58vh; min-height: 340px; }
   #index { top: 0; left: 0; bottom: 0; width: min(340px, 88vw); border-radius: 0; z-index: 30; transform: translateX(-102%); transition: transform .25s; position: fixed; background: var(--panel-solid); padding-top: env(safe-area-inset-top, 0px); }
@@ -264,7 +269,7 @@ svg text { font-family: var(--mono); }
 </head>
 <body>
 <header id="top">
-  <button class="btn" id="menuBtn" aria-controls="index" aria-expanded="false">Aircraft</button>
+  <button class="btn" id="menuBtn" aria-controls="index" aria-expanded="false" aria-haspopup="true"><span class="mk">Aircraft</span><b id="menuCur"></b><span class="mn num" id="menuN"></span><span class="mc" aria-hidden="true">&#9662;</span></button>
   <div class="brand"><h1>Jet<span>/</span>Atlas</h1><small>fighters and bombers in ASCII</small></div>
   <div class="topr">
     <button class="btn" id="sndBtn" title="Engine sound">Sound off <kbd>M</kbd></button>
@@ -378,7 +383,7 @@ svg text { font-family: var(--mono); }
 </div></div>
 
 <script>
-/* Jet Atlas 2026-09-26 */
+/* Jet Atlas 2026-09-27 */
 (() => {
 'use strict';
 
@@ -3367,6 +3372,8 @@ function selectAircraft(key, push = true) {
   if (push) try { history.replaceState(null, '', '#' + ac.key); } catch { }
   rebuild();
   renderIndex(); renderDossier(); renderThrottle(); syncButtons();
+  $('#menuCur').textContent = ac.short || ac.name;
+  $('#menuN').textContent = `${AIRCRAFT.indexOf(ac) + 1} / ${AIRCRAFT.length}`;
   cam.tzoom = 1;
 }
 
@@ -3633,7 +3640,7 @@ function initControls() {
   addEventListener('keydown', e => {
     if (e.target.matches('input[type=search], select')) { if (e.key === 'Escape') e.target.blur(); return; }
     const k = e.key;
-    if (k === 'Escape') { closeSheet(); $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); state.hl = 0; return; }
+    if (k === 'Escape') { closeSheet(); $('#help').hidden = true; $('#cmp').hidden = true; $('#index').classList.remove('open'); $('#menuBtn').setAttribute('aria-expanded', false); state.hl = 0; return; }
     if (k === '/') { e.preventDefault(); $('#index').classList.add('open'); $('#q').focus(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = k.toLowerCase();
@@ -3763,7 +3770,7 @@ function renderIndex() {
     html += `<li><button data-key="${a.key}" class="${state.ac === a ? 'on' : ''}"><span class="n">${a.short}</span><span class="v">${v}<i>${u}</i></span><span class="m">${a.nick ? a.nick + ' · ' : ''}${a.country} · ${a.first}</span></button></li>`;
   }
   $('#list').innerHTML = html || '<li class="grp">No aircraft match</li>';
-  $$('#list button').forEach(b => b.onclick = () => { selectAircraft(b.dataset.key); $('#index').classList.remove('open'); });
+  $$('#list button').forEach(b => b.onclick = () => { selectAircraft(b.dataset.key); $('#index').classList.remove('open'); $('#menuBtn').setAttribute('aria-expanded', false); });
 }
 
 function renderDossier() {
