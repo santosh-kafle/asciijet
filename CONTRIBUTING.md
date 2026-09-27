@@ -14,10 +14,10 @@ and we'll figure it out together.
 ## Before opening a pull request
 
 ```sh
-npm test                # rebuilds dist/ and runs the data check; CI runs the same on every pull request
+npm test                # rebuilds dist/, checks the data and draws every aircraft; CI runs the same on every pull request
 ```
 
-If you have Playwright installed, `npm run smoke` runs every aircraft in a browser.
+For the browser tools, run `npm install && npx playwright install chromium` once; then `npm run smoke` runs every aircraft in a browser.
 Commit the rebuilt `dist/` along with your changes to `src/`.
 
 Keep figures to publicly available information, and mark open-source estimates as **EST** like the existing data.

@@ -13,5 +13,8 @@
     "check": "node tools/check.cjs",
     "test": "node build.mjs && node tools/check.cjs",
     "smoke": "node tools/smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
   }
 }

@@ -44,11 +44,12 @@ drag orbit · scroll / pinch zoom · **W/S** throttle · **A** afterburner · **
 ## Build
 
 ```sh
-npm test                       # build + data check (what CI runs)
+npm test                       # build + data and render check (what CI runs)
 node build.mjs                 # writes dist/index.html, dist/artifact.html, dist/engine.cjs (Node 18+)
-node tools/check.cjs           # data check: stores, stations, engine counts, every scene builds
+node tools/check.cjs           # stores, stations, engine counts; every aircraft builds and draws
 node tools/ascii.cjs f16 150 20 1 0   # render an aircraft as text in the terminal (key yaw pitch throttle loadout)
-node tools/smoke.cjs           # browser test over every aircraft (needs Playwright)
+npm install && npx playwright install chromium   # once, for the browser tools below
+node tools/smoke.cjs           # browser test over every aircraft
 node tools/review.cjs f22,f35a # geometry review: top, side, front, bottom, front 3/4, rear 3/4 -> tools/out/
 node tools/fetch-refs.cjs       # download the reference three-views from Wikimedia Commons -> tools/ref/
 node tools/overlay.cjs f22     # model silhouette + metre grid over a published three-view -> tools/out/
