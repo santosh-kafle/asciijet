@@ -6,11 +6,37 @@ on:
   pull_request:
 
 jobs:
+  # Data and render check on the oldest supported Node and a current one, and a check that the
+  # committed dist/ matches a fresh build of src/.
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - name: dist/ is up to date
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::dist/ is out of date. Run 'npm test' (or 'node build.mjs') and commit dist/."
+            git diff --stat -- dist
+            exit 1
+          fi
+
+  # Every aircraft, tab, preset, bay and sweep in a real browser.
+  smoke:
+    runs-on: ubuntu-latest
+    needs: check
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm test
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run smoke

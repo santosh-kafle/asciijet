@@ -22,8 +22,11 @@ const js = `(() => {\n'use strict';\n${cat(engine)}${cat(page)}\n})();\n`;
 try { new vm.Script(js, { filename: 'jetatlas.js' }); }
 catch (e) { console.error('Syntax error in the bundled script:\n' + e.stack.split('\n').slice(0, 6).join('\n')); process.exit(1); }
 
+// Stamped with the package version, not the date, so a rebuild of the same source is byte-identical
+// (CI checks that the committed dist/ is up to date).
+const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const head = read('head.html'), body = read('body.html');
-const script = `<script>\n/* Jet Atlas ${new Date().toISOString().slice(0, 10)} */\n${js}</script>\n`;
+const script = `<script>\n/* Jet Atlas v${version} */\n${js}</script>\n`;
 fs.mkdirSync(DIST, { recursive: true });
 fs.writeFileSync(path.join(DIST, 'index.html'),
   `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n${head}\n</head>\n<body>\n${body}\n${script}</body>\n</html>\n`);
