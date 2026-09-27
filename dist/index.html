@@ -3464,11 +3464,16 @@ function fitFuel() {
 function hasBayStores() { return (state.ac.stations || []).some(s => s.kind === 'bay' && state.load[s.id]); }
 
 // ---- sizing
-function resize() {
+// Zooming out moves the camera away, so the aircraft covers fewer characters. To keep its detail the
+// grid gets finer as you zoom out: gridScale divides the font size (up to 1.5x, never below 4 px, since
+// the work grows with its square).
+let gridScale = 1;
+function resize(scale = gridScale) {
   const r = $('#stage').getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  gridScale = scale;
   // maximum quality: about 340 columns on a desktop screen, scaled down on narrow screens
   const base = 340, target = r.width < 600 ? base * 0.5 : r.width < 1100 ? base * 0.75 : base;
-  const fs = clamp(Math.round(r.width / target / 0.6), 5, 20);
+  const fs0 = clamp(Math.round(r.width / target / 0.6), 5, 20), fs = scale > 1 ? Math.max(4, Math.round(fs0 / scale)) : fs0;
   ctx.font = `600 ${fs}px ${FONT}`;
   const cw = ctx.measureText('M').width || fs * 0.6, ch = cw * 2;
   canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
@@ -3509,6 +3514,9 @@ function frame(t) {
     cam.pitch += (cam.tpitch - cam.pitch) * Math.min(1, dt * 4);
   }
   cam.zoom += (cam.tzoom - cam.zoom) * Math.min(1, dt * 6);
+  // finer grid when zoomed out, in 0.25 steps of the target zoom so a gesture rebuilds it only once
+  const gridStep = Math.round(clamp(cam.tzoom, 1, 1.5) * 4) / 4;
+  if (gridStep !== gridScale) resize(gridStep);
 
   const fr = freeRect(), cols = R.cols, rows = R.rows;
   const fov = 30, focCss = (geom.h / 2) / Math.tan(fov * D2R / 2);
