@@ -60,8 +60,12 @@ class Renderer {
     const { eye, f, r, u, foc, cx, cy } = cam;
 
     // Lights follow the camera (key from upper left, fill from lower right) so every angle reads.
+    // The key light sits above the aircraft; as the camera looks up at the belly it swings over (by way
+    // of the camera's own "up") to below, so the underside view is lit the way the top view is.
     const nrm = v => { const l = Math.hypot(...v); return v.map(x => x / l); };
-    const Lk = nrm([-f[0] * 0.35 - r[0] * 0.55, 0.9 - f[1] * 0.35 - r[1] * 0.55, -f[2] * 0.35 - r[2] * 0.55]);
+    const lu = clamp(f[1] * 2.5, 0, 1), wu = 4 * lu * (1 - lu), up = nrm([u[0] * wu, 1 - 2 * lu + u[1] * wu, u[2] * wu]);
+    const bounce = 0.32 * (1 - lu);   // light off the ground, for undersides seen from above
+    const Lk = nrm([-f[0] * 0.35 - r[0] * 0.55 + up[0] * 0.9, up[1] * 0.9 - f[1] * 0.35 - r[1] * 0.55, -f[2] * 0.35 - r[2] * 0.55 + up[2] * 0.9]);
     const Lf = nrm([-f[0] * 0.4 - u[0] * 0.3 + r[0] * 0.8, -f[1] * 0.4 - u[1] * 0.3 + r[1] * 0.8, -f[2] * 0.4 - u[2] * 0.3 + r[2] * 0.8]);
     const Hh = nrm([Lk[0] - f[0], Lk[1] - f[1], Lk[2] - f[2]]);
 
@@ -78,8 +82,9 @@ class Renderer {
       const k = nx * Lk[0] + ny * Lk[1] + nz * Lk[2], fl = nx * Lf[0] + ny * Lf[1] + nz * Lf[2];
       const h = nx * Hh[0] + ny * Hh[1] + nz * Hh[2], sky = ny * 0.5 + 0.5;
       const hl = -(nx * f[0] + ny * f[1] + nz * f[2]);   // faint headlight so faces toward the camera never go black
-      dp[i] = 0.07 + 0.66 * Math.max(0, k) ** 1.3 + 0.14 * Math.max(0, fl) + 0.08 * sky + 0.3 * Math.max(0, hl);
-      dm[i] = 0.07 + 0.66 * Math.max(0, -k) ** 1.3 + 0.14 * Math.max(0, -fl) + 0.08 * (1 - sky) + 0.3 * Math.max(0, -hl);
+      // bounce: light reflected up off the ground, so undersides are dim rather than black
+      dp[i] = 0.07 + 0.66 * Math.max(0, k) ** 1.3 + 0.14 * Math.max(0, fl) + 0.08 * sky + 0.3 * Math.max(0, hl) + bounce * Math.max(0, -ny);
+      dm[i] = 0.07 + 0.66 * Math.max(0, -k) ** 1.3 + 0.14 * Math.max(0, -fl) + 0.08 * (1 - sky) + 0.3 * Math.max(0, -hl) + bounce * Math.max(0, ny);
       sp[i] = h > 0 ? h ** 24 : 0; sm[i] = h < 0 ? (-h) ** 24 : 0;
     }
 

@@ -101,7 +101,8 @@ let tPrev = performance.now(), tNow = 0, uiTick = 0, audioTick = 0, intro = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   if (document.hidden) return;
-  const dt = Math.min(0.05, (t - tPrev) / 1000); tPrev = t; tNow += dt;
+  // up to 0.5 s per step so animation keeps real-time pace even when a frame is slow
+  const dt = Math.min(0.5, (t - tPrev) / 1000); tPrev = t; tNow += dt;
   if (!scene) return;
 
   // spool: engines take seconds to wind up; reheat lights quickly once at military power
@@ -157,8 +158,8 @@ function frame(t) {
   if ((uiTick += dt) > 0.1) { uiTick = 0; liveReadouts(); if (state.gun.firing) renderGun(); }
 }
 
-// Glyphs are batched by colour so each fillStyle is set once per frame.
-const bucketCount = new Uint32Array(4097), bucketStart = new Uint32Array(4097);
+// Glyphs are batched by colour (32 levels per channel) so each fillStyle is set once per frame.
+const NB = 1 << 15, bucketCount = new Uint32Array(NB + 1), bucketStart = new Uint32Array(NB + 1);
 let order = new Uint32Array(0);
 function drawGrid(ctx, R, geom, hl) {
   const { cw, ch, dpr } = geom, cols = R.cols, rows = R.rows, n = cols * rows;
@@ -166,24 +167,24 @@ function drawGrid(ctx, R, geom, hl) {
   ctx.fillStyle = '#0a0d10'; ctx.fillRect(0, 0, geom.w, geom.h);
   ctx.font = `600 ${geom.fs}px ${FONT}`; ctx.textBaseline = 'middle';
   if (order.length < n) order = new Uint32Array(n);
-  const keyOf = new Uint16Array(n), C = R.col, chars = R.chars, tags = R.cellTag;
+  const keyOf = new Uint32Array(n), C = R.col, chars = R.chars, tags = R.cellTag;
   bucketCount.fill(0);
   for (let i = 0; i < n; i++) {
-    if (chars[i] === 32) { keyOf[i] = 4096; continue; }
+    if (chars[i] === 32) { keyOf[i] = NB; continue; }
     let r = C[i * 3], g = C[i * 3 + 1], b = C[i * 3 + 2];
     if (hl && tags[i] === hl) { r = 255; g = 176; b = 74; }
-    const k = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+    const k = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
     keyOf[i] = k; bucketCount[k]++;
   }
   let acc = 0;
-  for (let k = 0; k < 4096; k++) { bucketStart[k] = acc; acc += bucketCount[k]; }
+  for (let k = 0; k < NB; k++) { bucketStart[k] = acc; acc += bucketCount[k]; }
   const fill = bucketStart.slice();
-  for (let i = 0; i < n; i++) if (keyOf[i] < 4096) order[fill[keyOf[i]]++] = i;
+  for (let i = 0; i < n; i++) if (keyOf[i] < NB) order[fill[keyOf[i]]++] = i;
   const ox = geom.ox, oy = geom.oy + ch / 2;
-  for (let k = 0; k < 4096; k++) {
+  for (let k = 0; k < NB; k++) {
     const cnt = bucketCount[k]; if (!cnt) continue;
     // lift dark colours a little so dim surfaces stay legible on the dark ground
-    const r = (k >> 8) * 17, g = ((k >> 4) & 15) * 17, b = (k & 15) * 17;
+    const r = (k >> 10) * 255 / 31, g = ((k >> 5) & 31) * 255 / 31, b = (k & 31) * 255 / 31;
     ctx.fillStyle = `rgb(${24 + r * 0.92 | 0},${26 + g * 0.92 | 0},${30 + b * 0.92 | 0})`;
     for (let j = bucketStart[k], e = j + cnt; j < e; j++) {
       const i = order[j], x = i % cols, y = (i / cols) | 0;
