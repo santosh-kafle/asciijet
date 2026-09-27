@@ -1,4 +1,4 @@
-// Special liveries, painted per pixel so stripes and stars stay crisp across big triangles.
+// Liveries, painted per pixel so stripes and stars stay crisp across big triangles.
 // Geometry entries opt in with `liv: '<role>'`; paint(role, s, y, z, n) gets the pixel's position
 // (s = metres aft of the nose, y up, z starboard) and the face normal, and returns [r, g, b] or null
 // to keep the normal scheme.

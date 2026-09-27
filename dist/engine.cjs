@@ -733,7 +733,7 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  const livery = o.livery && LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
+  const livery = LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
   return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns, livery };
 }
 
@@ -2171,7 +2171,7 @@ function fxFor(ac) {
 }
 
 // ---- 39-livery.js
-// Special liveries, painted per pixel so stripes and stars stay crisp across big triangles.
+// Liveries, painted per pixel so stripes and stars stay crisp across big triangles.
 // Geometry entries opt in with `liv: '<role>'`; paint(role, s, y, z, n) gets the pixel's position
 // (s = metres aft of the nose, y up, z starboard) and the face normal, and returns [r, g, b] or null
 // to keep the normal scheme.

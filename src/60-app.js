@@ -12,7 +12,7 @@ const state = {
   ac: null, loadIdx: 0, load: {}, custom: false,
   thr: 0, thrTarget: 0, bays: false,
   labels: store.get('labels', true), ground: store.get('ground', true), spin: true,
-  gear: store.get('gear', true), livery: store.get('livery', false), detail: 3,   // always maximum quality
+  gear: store.get('gear', true), detail: 3,   // always maximum quality
   gun: { firing: false, bursts: [], ammo: 0 },
   sweep: null, fuel: 1, tab: 'loadout', cat: 'All', q: '', sort: 'cat', cmp: store.get('cmp', []), hl: 0, hover: 0,
 };
@@ -29,7 +29,7 @@ function milPos(ac = state.ac) { return hasAB(ac) ? MIL : 1; }
 // ---- scene
 function rebuild() {
   const ac = state.ac;
-  scene = buildScene(ac, { loadout: state.load, bays: state.bays, sweep: state.sweep, gear: state.gear, livery: state.livery, detail: state.detail });
+  scene = buildScene(ac, { loadout: state.load, bays: state.bays, sweep: state.sweep, gear: state.gear, detail: state.detail });
   R.setScene(scene, ac);
   makeLabels();
 }
@@ -292,7 +292,6 @@ function initControls() {
   $('#labBtn').onclick = () => { state.labels = !state.labels; store.set('labels', state.labels); syncButtons(); };
   $('#grdBtn').onclick = () => { state.ground = !state.ground; store.set('ground', state.ground); syncButtons(); };
   $('#gearBtn').onclick = () => { state.gear = !state.gear; store.set('gear', state.gear); rebuild(); syncButtons(); audio.bay(state.gear); };
-  $('#livBtn').onclick = () => { state.livery = !state.livery; store.set('livery', state.livery); rebuild(); syncButtons(); };
   $('#spinBtn').onclick = () => { state.spin = !state.spin; syncButtons(); };
   $$('[data-view]').forEach(b => b.onclick = () => setView(b.dataset.view));
   $('#sweep').addEventListener('input', e => {
@@ -325,7 +324,6 @@ function initControls() {
     else if (key === 'l') $('#labBtn').click();
     else if (key === 'g') $('#grdBtn').click();
     else if (key === 'u') $('#gearBtn').click();
-    else if (key === 'p') $('#livBtn').click();
     else if (key === 'c') addCompare();
     else if (key === 'o') sheet.open ? closeSheet() : openSheet();
     else if (key === 'm') $('#sndBtn').click();
@@ -383,9 +381,6 @@ function syncButtons() {
   $('#grdBtn').classList.toggle('on', state.ground);
   $('#gearBtn').classList.toggle('on', state.gear);
   $('#spinBtn').classList.toggle('on', state.spin);
-  const liv = LIVERIES[state.ac.key];
-  $('#livBtn').hidden = !liv;
-  if (liv) { $('#livBtn').classList.toggle('on', state.livery); $('#livBtn').title = 'Special paint: ' + liv.name; }
   $('#sndBtn').classList.toggle('on', audio.on);
   $('#sndBtn').innerHTML = (audio.on ? 'Sound on' : 'Sound off') + ' <kbd>M</kbd>';
   const ab = hasAB();

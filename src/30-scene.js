@@ -203,7 +203,7 @@ function buildScene(ac, o = {}) {
     R = Math.max(R, Math.hypot(mesh.V[i], mesh.V[i + 1], mesh.V[i + 2]));
     minY = Math.min(minY, mesh.V[i + 1]);
   }
-  const livery = o.livery && LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
+  const livery = LIVERIES[ac.key] ? { paint: LIVERIES[ac.key].paint, roles: livRoles } : null;
   return { mesh, exhausts, props, labels, inst, R, minY, groundY, guns, livery };
 }
 
