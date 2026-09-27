@@ -9,6 +9,8 @@ Open `dist/index.html` in a browser. It is one self-contained file with no depen
 > simulator or a reference work, and it is not affiliated with any manufacturer or air force. You are free to use it,
 > fork it, remix it and build on it: see [License](#license).
 
+![F-15E Strike Eagle in the stars-and-stripes livery with the heavy strike loadout](docs/screenshots/f-15e.png)
+
 ![F-22A Raptor in afterburner with the air dominance loadout](docs/screenshots/f-22a.png)
 
 ![MiG-31BM Foxhound at maximum afterburner carrying R-37M and R-73 missiles](docs/screenshots/mig-31bm.png)
